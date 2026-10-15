@@ -130,7 +130,7 @@ web/src/audio.js        Web Audio I/O, music carrier, WAV read/write
 web/src/app.js          UI wiring, spectrum display, in-page self-test
 tools/sonicspy-cli.mjs  encode/decode/selftest for agents and scripts
 tools/serve.mjs         dependency-free static server
-tests/                  modem, protocol and real-browser smoke tests
+tests/                  modem, protocol, adversarial and real-browser tests
 android/                Capacitor native project
 ```
 

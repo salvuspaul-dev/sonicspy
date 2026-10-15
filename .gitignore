@@ -6,6 +6,7 @@ android/local.properties
 
 # Build output and local artifacts
 artifacts/
+.gstack/
 *.apk
 *.aab
 *.keystore
