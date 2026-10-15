@@ -56,6 +56,18 @@ export const PROFILES = {
   },
 };
 
+/* Profiles are keyed by name in the CLI, the UI and the URL, so a bare name is
+ * an easy thing to hand to the modem by mistake. Accept either, and fail with
+ * something readable rather than a NaN-length buffer. */
+function resolveProfile(profile) {
+  if (typeof profile !== 'string') return profile;
+  const found = PROFILES[profile];
+  if (!found) {
+    throw new Error(`unknown profile "${profile}" - try: ${Object.keys(PROFILES).join(', ')}`);
+  }
+  return found;
+}
+
 export function bitsPerSymbol(profile) {
   return Math.log2(profile.m);
 }
@@ -137,7 +149,7 @@ function goertzelPower(x, offset, N, freq, fs) {
  * separated by a short silence so the receiver can finalise each one. */
 export function modulateFrames(frames, opts) {
   const fs = opts.fs;
-  const profile = opts.profile;
+  const profile = resolveProfile(opts.profile);
   const bps = bitsPerSymbol(profile);
   const N = Math.max(8, Math.round(fs * profile.symbolSeconds));
   const gapSamples = Math.round(N * (opts.gapSymbols ?? 6));
@@ -194,7 +206,7 @@ export function modulateFrame(frame, opts) {
 export class Demodulator {
   constructor(opts) {
     this.fs = opts.fs;
-    this.profile = opts.profile;
+    this.profile = resolveProfile(opts.profile);
     this.bps = bitsPerSymbol(this.profile);
     this.N = Math.max(8, Math.round(this.fs * this.profile.symbolSeconds));
     this.hop = Math.max(1, Math.round(this.N / 4));

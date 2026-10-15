@@ -17,7 +17,8 @@ It is useful when there is no usable link: no Wi-Fi, no cellular, no Bluetooth p
 
 Verified by automated tests and by rendering in a real browser:
 
-- 26 unit tests covering the modem and protocol pass (clean loopback on all three profiles, 10 dB and 4 dB SNR, interference from music, late join mid-broadcast, byte-for-byte binary integrity, corrupted frames rejected by CRC, out-of-order and duplicate chunks).
+- 90 unit tests covering the modem and protocol pass (clean loopback on all three profiles, 10 dB and 4 dB SNR, interference from music, late join mid-broadcast, byte-for-byte binary integrity, corrupted frames rejected by CRC, out-of-order and duplicate chunks).
+- A separate suite models the impairments that only exist between two physical devices, none of which appear in an idealised channel: independent sample clocks (drift up to ±1000 ppm, both directions, on every profile), transducer frequency response (500 Hz high-pass and 7.5 kHz low-pass), an overdriven amplifier clipping to a quarter of full scale, DC offset plus 50 Hz mains hum, a room reflection arriving 18 ms late, and a capture callback delivering audio in awkward chunk sizes (single samples, primes, random 1–8192, 64 K blocks).
 - A real-browser smoke test drives the actual UI in Brave/Chromium: encoding, decoding, the in-page self-test on all three profiles, and the diagnostics view all pass.
 - The Android APK builds, is correctly signed, declares the microphone permissions, and contains the full application.
 
@@ -137,6 +138,7 @@ The DSP core (`modem.js`, `protocol.js`, `transfer.js`) has no DOM or Web Audio 
 ## Known limitations
 
 - **No forward error correction** (see above).
+- **Clock drift is tolerated to ±1000 ppm, measured.** Real crystals sit at ±20–100 ppm, so that is 10–50× of margin. The measured cliff is ±5000 ppm, where `robust` stops decoding: every profile shares a symbol duration, but `robust` needs the most symbols per frame, so its frame lasts longest and accumulates the most timing error (about 1.1 symbol periods at that error rate). Timing is re-acquired from each frame's preamble, but symbols *within* a frame are read at fixed offsets, so error accumulates over a frame's length. Fixing it would mean intra-frame timing tracking, which is not worth the complexity for error 50× beyond specification.
 - **Throughput is bounded by physics**, not by optimisation.
 - **Range is untested on real hardware.** Expect a few metres in a quiet room, less with background noise.
 - The three moderate `npm audit` warnings are in `uuid`, pulled in transitively by the Capacitor **CLI's** iOS project helper. They affect build tooling only and are not present in the shipped APK. The suggested fix is a downgrade of the CLI, which is why it has not been applied.
