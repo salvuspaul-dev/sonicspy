@@ -1,0 +1,11 @@
+# Keep shell scripts LF so the Gradle wrapper works on Linux and macOS.
+* text=auto
+*.sh text eol=lf
+gradlew text eol=lf
+*.bat text eol=crlf
+
+*.jar binary
+*.png binary
+*.jpg binary
+*.wav binary
+*.apk binary

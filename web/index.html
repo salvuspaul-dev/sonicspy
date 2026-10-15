@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark" />
+    <title>SonicSpy — data over sound</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23070b16'/><g fill='%234ade80'><rect x='7' y='12' width='3' height='8' rx='1.5'/><rect x='12.5' y='8' width='3' height='16' rx='1.5'/><rect x='18' y='5' width='3' height='22' rx='1.5'/><rect x='23.5' y='11' width='3' height='10' rx='1.5'/></g></svg>"
+    />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="top">
+      <div>
+        <h1>Sonic<span>Spy</span></h1>
+        <p class="tagline">
+          Send messages, files and raw data between devices using sound alone — no network, no
+          pairing, no accounts. Tones carry the bytes; any speaker and microphone will do.
+        </p>
+      </div>
+      <div class="profile-box">
+        <label for="profile-select">Profile</label>
+        <select id="profile-select">
+          <option value="robust">Robust — people, noisy rooms</option>
+          <option value="fast">Fast — agents and bytes</option>
+          <option value="turbo">Turbo — files, quiet room</option>
+        </select>
+        <div class="profile-rate" id="profile-rate">—</div>
+        <div class="profile-detail" id="profile-detail">—</div>
+      </div>
+    </header>
+
+    <nav class="tabs">
+      <button class="tab active" data-panel="send">Send</button>
+      <button class="tab" data-panel="listen">Listen</button>
+      <button class="tab" data-panel="music">Music carrier</button>
+      <button class="tab" data-panel="agents">Agents</button>
+      <button class="tab" data-panel="diag">Diagnostics</button>
+    </nav>
+
+    <main>
+      <!-- ------------------------------------------------------------- SEND -->
+      <section class="panel active" id="panel-send">
+        <h2>Send something</h2>
+        <div class="sub-tabs">
+          <button class="sub-tab active" data-sendmode="text">Text</button>
+          <button class="sub-tab" data-sendmode="file">File</button>
+          <button class="sub-tab" data-sendmode="bytes">Raw bytes (hex)</button>
+        </div>
+
+        <div class="send-pane active" id="send-text">
+          <label for="send-text-input">Message</label>
+          <textarea id="send-text-input" rows="3" placeholder="Type a message to send by sound…"></textarea>
+        </div>
+
+        <div class="send-pane" id="send-file">
+          <label for="send-file-input">File</label>
+          <input type="file" id="send-file-input" />
+          <p class="hint">
+            Any file — a document, a photo, a key. Transfer time is shown before you send it,
+            because sound is a slow pipe: a few hundred bytes per second, not megabytes.
+          </p>
+        </div>
+
+        <div class="send-pane" id="send-bytes">
+          <label for="send-hex">Bytes as hex</label>
+          <textarea id="send-hex" rows="3" placeholder="a5c35a…"></textarea>
+          <div class="row">
+            <button id="btn-random" class="ghost">Generate 32 random bytes</button>
+            <span class="hint">Agent-to-agent payloads, device handshakes, keys, sensor frames.</span>
+          </div>
+        </div>
+
+        <div class="row options">
+          <label class="inline">
+            Repeats
+            <input type="number" id="repeats" value="2" min="1" max="20" />
+          </label>
+          <label class="inline">
+            <input type="checkbox" id="compress" checked />
+            Compress files before sending
+          </label>
+          <label class="inline">
+            <input type="checkbox" id="duck" checked />
+            Dip music while transmitting
+          </label>
+        </div>
+
+        <div class="row actions">
+          <button id="btn-preview" class="ghost">Preview cost</button>
+          <button id="btn-send" class="primary">Send once</button>
+          <button id="btn-broadcast">Broadcast loop (keep playing)</button>
+          <button id="btn-stop-send" class="danger">Stop</button>
+          <button id="send-wav" class="ghost" disabled>Save as WAV</button>
+        </div>
+
+        <div class="status" id="send-status">Ready.</div>
+        <div class="eta" id="send-eta"></div>
+        <p class="hint">
+          The broadcast loop keeps a message on the air. Anyone who starts listening late still
+          collects every frame and gets the whole message, because each frame carries its place in
+          the sequence.
+        </p>
+      </section>
+
+      <!-- ----------------------------------------------------------- LISTEN -->
+      <section class="panel" id="panel-listen">
+        <h2>Listen</h2>
+        <div class="row actions">
+          <button id="btn-listen" class="primary">Start listening</button>
+          <label class="inline">
+            Squelch
+            <input type="range" id="squelch" min="0.02" max="0.4" step="0.01" value="0.1" />
+          </label>
+          <button id="btn-clear" class="ghost">Clear log</button>
+        </div>
+        <div class="status" id="listen-status">Not listening.</div>
+
+        <canvas id="spectrum" width="900" height="160"></canvas>
+        <p class="hint">
+          Green is what the microphone hears, blue lines are the tones this profile uses. A
+          staircase walking across the lines is a message arriving.
+        </p>
+
+        <div class="stats">
+          <span>frames decoded <b id="stat-frames">0</b></span>
+          <span>CRC failures <b id="stat-crc">0</b></span>
+          <span>preamble match <b id="stat-score">0.00</b></span>
+          <span id="device-info">not started</span>
+        </div>
+
+        <h3>Incomplete transfers</h3>
+        <div id="pending" class="pending"></div>
+
+        <h3>Received</h3>
+        <div id="messages" class="messages"></div>
+      </section>
+
+      <!-- ------------------------------------------------------------ MUSIC -->
+      <section class="panel" id="panel-music">
+        <h2>Music carrier</h2>
+        <p class="hint">
+          Play any track and the data rides along inside it. The tones sit above the music in the
+          same audio, so a phone across the room can decode the payload while everyone still hears
+          the song.
+        </p>
+        <div class="row">
+          <input type="file" id="music-file" accept="audio/*" />
+          <button id="btn-music-play" class="primary" disabled>Play</button>
+          <button id="btn-music-stop" class="danger">Stop music</button>
+        </div>
+        <div class="row options">
+          <label class="inline">
+            Music level
+            <input type="range" id="music-volume" min="0" max="1" step="0.01" value="0.5" />
+          </label>
+          <label class="inline">
+            Data level
+            <input type="range" id="data-volume" min="0.05" max="1" step="0.01" value="0.35" />
+          </label>
+        </div>
+        <div class="status" id="music-status">No music loaded.</div>
+        <ol class="steps">
+          <li>Pick a track and press Play.</li>
+          <li>Go to <b>Send</b>, choose Text or File, then press <b>Broadcast loop</b>.</li>
+          <li>On the other device open <b>Listen</b> and hold it near the speaker.</li>
+        </ol>
+        <p class="hint">
+          Honest limits: louder, denser music makes the tones harder to hear, so raise the data
+          level or leave ducking on. This survives music at ordinary listening levels, not a
+          concert.
+        </p>
+      </section>
+
+      <!-- ----------------------------------------------------------- AGENTS -->
+      <section class="panel" id="panel-agents">
+        <h2>Agents and machines</h2>
+        <p class="hint">
+          Machines do not need to speak. The same link carries raw bytes, so two agents can
+          exchange structured data faster than they could exchange words — and the CLI turns the
+          link into plain files, so an agent that has no microphone can still take part.
+        </p>
+
+        <h3>Command line</h3>
+        <pre class="code"># Encode a message or a file into a WAV an agent can play or hand to another agent
+node tools/sonicspy-cli.mjs encode --text "hello" --out hello.wav --profile fast
+node tools/sonicspy-cli.mjs encode --file report.json --out report.wav --profile turbo
+
+# Decode a recording back into messages and files
+node tools/sonicspy-cli.mjs decode --in recording.wav --out-dir received/
+
+# Inspect the link without sending anything
+node tools/sonicspy-cli.mjs selftest --profile turbo</pre>
+
+        <h3>Frame format</h3>
+        <p class="hint">
+          Every frame is self-describing, so a receiver can lock on to a broadcast already in
+          progress. All fields big-endian.
+        </p>
+        <table class="spec">
+          <thead>
+            <tr><th>Field</th><th>Bytes</th><th>Meaning</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>preamble</td><td>16 symbols</td><td>alternating lowest and highest tone</td></tr>
+            <tr><td>sync</td><td>3</td><td><code>a5 c3 5a</code></td></tr>
+            <tr><td>version</td><td>1</td><td>protocol version, currently 1</td></tr>
+            <tr><td>flags</td><td>1</td><td>bit 0 binary payload, bit 1 gzip</td></tr>
+            <tr><td>msg&nbsp;id</td><td>4</td><td>random per message, groups the chunks</td></tr>
+            <tr><td>seq</td><td>2</td><td>frame counter within the message</td></tr>
+            <tr><td>chunk index</td><td>2</td><td>which piece this frame carries</td></tr>
+            <tr><td>chunk total</td><td>2</td><td>how many pieces the message has</td></tr>
+            <tr><td>payload length</td><td>2</td><td>bytes in this frame's payload</td></tr>
+            <tr><td>payload</td><td>n</td><td>message bytes</td></tr>
+            <tr><td>CRC-16</td><td>2</td><td>CCITT-FALSE over version…payload; bad frames are dropped</td></tr>
+          </tbody>
+        </table>
+
+        <h3>Why this is faster than talking</h3>
+        <ul class="plain">
+          <li><b>No rendering step.</b> Bytes go straight into tones and straight back out.</li>
+          <li><b>One to many.</b> A broadcast reaches every device in earshot at once, with no
+            connection, handshake or pairing.</li>
+          <li><b>Compression.</b> Structured payloads are gzipped before transmission, which on a
+            slow channel buys more than any tweak to the modulation.</li>
+        </ul>
+      </section>
+
+      <!-- -------------------------------------------------------------- DIAG -->
+      <section class="panel" id="panel-diag">
+        <h2>Diagnostics</h2>
+        <p class="hint">
+          The self-test runs the real modulator and demodulator inside this page, adds noise, and
+          checks the message survives. It needs no microphone and no second device, so it is the
+          quickest way to confirm the link works on this hardware.
+        </p>
+        <div class="row">
+          <input type="text" id="selftest-text" value="sonicspy self test" />
+          <button id="btn-selftest" class="primary">Run self-test</button>
+        </div>
+        <div id="selftest-result" class="selftest"></div>
+
+        <h3>Tones for this profile</h3>
+        <table class="spec" id="tone-table">
+          <thead>
+            <tr><th>Symbol</th><th>Bits</th><th>Frequency</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+
+        <h3>How it works</h3>
+        <p class="hint">
+          Data is sent as MFSK: a short window of one pure tone per symbol, phases continuous so
+          the sound is clean. The receiver measures the energy at each expected tone frequency with
+          a Goertzel filter over a Hann window and takes the strongest — no carrier lock needed,
+          only an estimate of where each symbol starts. A 16 symbol alternating preamble gives that
+          timing, and every frame is protected by a CRC.
+        </p>
+      </section>
+    </main>
+
+    <script type="module" src="src/app.js"></script>
+  </body>
+</html>

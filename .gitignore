@@ -1,0 +1,16 @@
+node_modules/
+
+# Capacitor copies the web build into the native project; it is generated.
+android/app/src/main/assets/public/
+android/local.properties
+
+# Build output and local artifacts
+artifacts/
+*.apk
+*.aab
+*.keystore
+*.jks
+*.wav
+*.log
+.DS_Store
+Thumbs.db

@@ -1,0 +1,20 @@
+{
+  "name": "sonicspy",
+  "version": "0.1.0",
+  "description": "Send messages, data and files between devices using sound — no network, no pairing.",
+  "type": "module",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "test": "node --test tests/",
+    "serve": "node tools/serve.mjs",
+    "cli": "node tools/sonicspy-cli.mjs"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^8.5.3"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.5.3",
+    "@capacitor/core": "^8.5.3"
+  }
+}
