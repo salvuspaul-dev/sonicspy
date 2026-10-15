@@ -220,6 +220,7 @@ export class Demodulator {
     this.pos = 0;
     this.framesDecoded = 0;
     this.crcFailures = 0;
+    this.frameErrors = 0;
     this.lastPreambleScore = 0;
 
     this.freqs = [];
@@ -396,7 +397,16 @@ export class Demodulator {
   handleFrame(bytes) {
     const ok = crc16(bytes, 3, bytes.length - 2) === ((bytes[bytes.length - 2] << 8) | bytes[bytes.length - 1]);
     if (!ok) return false;
-    this.onFrame(bytes);
+    /* This runs inside the audio callback. An exception escaping here would
+     * leave the scan position unadvanced, so the same bytes would throw again
+     * on every buffer and reception would never recover — one bad frame from
+     * anyone in earshot would be a permanent kill. Contain it and count it. */
+    try {
+      this.onFrame(bytes);
+    } catch (err) {
+      this.frameErrors++;
+      if (typeof console !== 'undefined') console.warn('sonicspy: dropping frame, handler threw', err);
+    }
     return true;
   }
 }

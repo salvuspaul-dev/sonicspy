@@ -94,7 +94,15 @@ export function framesForMessage({ id = randomId(), bytes, flags = 0, chunkBytes
     chunks.push(bytes.slice(at, Math.min(at + chunkBytes, bytes.length)));
   }
   if (chunks.length === 0) chunks.push(new Uint8Array(0));
-  const total = Math.min(chunks.length, 0xffff);
+  /* The chunk count lives in a 16-bit header field, so this is the hard ceiling
+   * on one message. Refusing is the only honest answer: clamping would drop the
+   * tail and still tell the receiver it had received the whole thing. */
+  if (chunks.length > 0xffff) {
+    throw new RangeError(
+      `message too large: ${chunks.length} chunks exceeds the ${0xffff} the frame header can count`,
+    );
+  }
+  const total = chunks.length;
   const frames = [];
   for (let i = 0; i < total; i++) {
     frames.push(buildFrame({ flags, msgId: id, seq: i, chunkIndex: i, chunkTotal: total, payload: chunks[i] }));
@@ -118,7 +126,7 @@ export function framesForBinary(bytes, opts = {}) {
  * chunk is present. Repeats change nothing, which is why a sender can loop a
  * message indefinitely and a late listener still ends up with the whole thing. */
 export class Reassembler {
-  constructor({ onProgress, onComplete, maxAgeMs = 30 * 60 * 1000 } = {}) {
+  constructor({ onProgress, onComplete, maxAgeMs = 30 * 60 * 1000, maxInFlight = 4096 } = {}) {
     this.messages = new Map();
     /* Senders repeat frames so that a lossy or late listen still succeeds.
      * Without this, a clean listener would re-emit the same message on every
@@ -127,6 +135,7 @@ export class Reassembler {
     this.onProgress = onProgress ?? (() => {});
     this.onComplete = onComplete ?? (() => {});
     this.maxAgeMs = maxAgeMs;
+    this.maxInFlight = maxInFlight;
   }
 
   #prune(now) {
@@ -138,6 +147,15 @@ export class Reassembler {
     }
   }
 
+  /* Every unknown id starts state that would otherwise live until it expires.
+   * Junk in earshot must not grow this without bound, so the oldest in-flight
+   * message is dropped to stay under the ceiling. */
+  #makeRoom() {
+    while (this.messages.size >= this.maxInFlight) {
+      this.messages.delete(this.messages.keys().next().value);
+    }
+  }
+
   /* Returns 'duplicate' | 'progress' | 'complete' | 'stale'. */
   accept(bytes, now = Date.now()) {
     const frame = parseFrame(bytes);
@@ -145,8 +163,14 @@ export class Reassembler {
     this.#prune(now);
     if (this.completed.has(frame.msgId)) return 'duplicate';
 
+    /* A frame numbering itself outside its own declared total can never belong
+     * to a message being assembled, and reading a sparse map by position would
+     * run past what actually arrived. Anyone in earshot can send one. */
+    if (frame.chunkTotal === 0 || frame.chunkIndex >= frame.chunkTotal) return 'stale';
+
     let entry = this.messages.get(frame.msgId);
     if (!entry) {
+      this.#makeRoom();
       entry = {
         id: frame.msgId,
         flags: frame.flags,
@@ -160,6 +184,11 @@ export class Reassembler {
     }
     entry.lastSeen = now;
     entry.frames++;
+
+    /* Two different messages reusing one id would otherwise splice their chunks
+     * into a file that is neither. The first total seen wins, and frames that
+     * disagree with it are not part of this message. */
+    if (frame.chunkTotal !== entry.total) return 'stale';
 
     if (entry.parts.has(frame.chunkIndex)) return 'duplicate';
     entry.parts.set(frame.chunkIndex, frame.payload);

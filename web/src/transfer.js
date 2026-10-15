@@ -66,14 +66,23 @@ export function parseFileContainer(bytes) {
   let at = MAGIC.length;
   const nameLen = decodeVarint(bytes, at);
   at = nameLen.next;
+  if (at + nameLen.value > bytes.length) throw new Error('truncated container');
   const name = new TextDecoder().decode(bytes.subarray(at, at + nameLen.value));
   at += nameLen.value;
   const mimeLen = decodeVarint(bytes, at);
   at = mimeLen.next;
+  if (at + mimeLen.value > bytes.length) throw new Error('truncated container');
   const mime = new TextDecoder().decode(bytes.subarray(at, at + mimeLen.value));
   at += mimeLen.value;
   const size = decodeVarint(bytes, at);
   at = size.next;
+  /* The declared length is what the receiver shows the user it received. If
+   * fewer bytes arrived than the container claims, the file is not complete,
+   * and reporting it as complete is the one failure a file tool must not have. */
+  const available = bytes.length - at;
+  if (size.value > available) {
+    throw new Error(`truncated container: claims ${size.value} bytes, ${available} arrived`);
+  }
   return { name, mime, data: bytes.slice(at, at + size.value), size: size.value };
 }
 
@@ -93,11 +102,42 @@ export async function maybeCompress(bytes, wantCompressed) {
   }
 }
 
-export async function maybeDecompress(bytes, gzipped) {
+export async function maybeDecompress(bytes, gzipped, { maxBytes = 64 * 1024 * 1024 } = {}) {
   if (!gzipped) return bytes;
   if (typeof DecompressionStream === 'undefined') return bytes;
-  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
-  return new Uint8Array(await new Response(stream).arrayBuffer());
+  let reader;
+  try {
+    const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
+    reader = stream.getReader();
+  } catch (err) {
+    throw new Error(`corrupt gzip payload: ${err?.message ?? err}`);
+  }
+  /* Counted as it arrives, because a few hundred bytes of gzip can expand to
+   * gigabytes — and this payload came in over the air from whoever is nearby. */
+  const chunks = [];
+  let total = 0;
+  for (;;) {
+    let step;
+    try {
+      step = await reader.read();
+    } catch (err) {
+      throw new Error(`corrupt gzip payload: ${err?.message ?? err}`);
+    }
+    if (step.done) break;
+    total += step.value.length;
+    if (total > maxBytes) {
+      await reader.cancel();
+      throw new Error(`decompressed payload exceeds the ${maxBytes} byte limit`);
+    }
+    chunks.push(step.value);
+  }
+  const out = new Uint8Array(total);
+  let at = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, at);
+    at += chunk.length;
+  }
+  return out;
 }
 
 /* Bytes per second of payload actually delivered, used for honest ETAs. */
