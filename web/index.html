@@ -26,6 +26,7 @@
           <option value="robust">Robust — people, noisy rooms</option>
           <option value="fast">Fast — agents and bytes</option>
           <option value="turbo">Turbo — files, quiet room</option>
+          <option value="stealth">Stealth — inaudible, hides under music</option>
         </select>
         <div class="profile-rate" id="profile-rate">—</div>
         <div class="profile-detail" id="profile-detail">—</div>
@@ -35,7 +36,10 @@
     <nav class="tabs">
       <button class="tab active" data-panel="send">Send</button>
       <button class="tab" data-panel="listen">Listen</button>
+      <button class="tab" data-panel="link">Link</button>
+      <button class="tab" data-panel="translate">Translate</button>
       <button class="tab" data-panel="music">Music carrier</button>
+      <button class="tab" data-panel="codes">Codes</button>
       <button class="tab" data-panel="agents">Agents</button>
       <button class="tab" data-panel="diag">Diagnostics</button>
     </nav>
@@ -59,8 +63,8 @@
           <label for="send-file-input">File</label>
           <input type="file" id="send-file-input" />
           <p class="hint">
-            Any file — a document, a photo, a key. Transfer time is shown before you send it,
-            because sound is a slow pipe: a few hundred bytes per second, not megabytes.
+            Any file — a document, a photo, a public key. Transfer time is shown before you send it,
+            because sound is a slow pipe: tens of bytes per second, so small files only.
           </p>
         </div>
 
@@ -112,7 +116,7 @@
           <button id="btn-listen" class="primary">Start listening</button>
           <label class="inline">
             Squelch
-            <input type="range" id="squelch" min="0.02" max="0.4" step="0.01" value="0.1" />
+            <input type="range" id="squelch" min="0.001" max="0.4" step="0.001" value="0.002" />
           </label>
           <button id="btn-clear" class="ghost">Clear log</button>
         </div>
@@ -136,6 +140,81 @@
 
         <h3>Received</h3>
         <div id="messages" class="messages"></div>
+      </section>
+
+      <!-- ------------------------------------------------------------- LINK -->
+      <section class="panel" id="panel-link">
+        <h2>SonicSpy Link</h2>
+        <p class="hint">
+          AI agents and people talking over sound. A link opens in gibberlink's language (ggwave),
+          so any gibberlink agent understands it. When the other side is SonicSpy too, both move to
+          SonicSpy's own modes: faster, any length, files, error-corrected so nothing arrives
+          garbled, and a stealth mode that hides under music.
+        </p>
+        <div class="row options">
+          <label class="inline">
+            Prefer
+            <select id="link-mode">
+              <option value="turbo">Turbo — fastest, close range</option>
+              <option value="fast">Fast — agents and bytes</option>
+              <option value="robust">Robust — across a noisy room</option>
+              <option value="stealth">Stealth — near-ultrasonic</option>
+            </select>
+          </label>
+          <label class="inline">
+            Auto-reply
+            <select id="link-auto">
+              <option value="off">Off</option>
+              <option value="echo">Echo (demo agent)</option>
+            </select>
+          </label>
+        </div>
+        <div class="row actions">
+          <button id="btn-link-start" class="primary">Open link</button>
+          <span class="hint" id="link-id"></span>
+        </div>
+        <div class="status" id="link-status">Not connected.</div>
+
+        <label for="link-text">Message</label>
+        <textarea id="link-text" rows="2" placeholder="Say something to whoever is listening…"></textarea>
+        <div class="row actions">
+          <button id="btn-link-say" class="primary">Send</button>
+          <input type="file" id="link-file" />
+          <button id="btn-link-file">Send file</button>
+        </div>
+
+        <h3>Conversation</h3>
+        <div id="link-log" class="messages chat"></div>
+      </section>
+
+      <!-- -------------------------------------------------------- TRANSLATE -->
+      <section class="panel" id="panel-translate">
+        <h2>Translator</h2>
+        <p class="hint">
+          Hears machine languages and writes them down: SonicSpy in all four modes, ggwave and
+          gibberlink, DTMF keypad tones, Morse and tap code. Morse and tap are read from rhythm
+          alone, so while another protocol is on air their guesses are set aside.
+        </p>
+        <div class="row options" id="translate-channels"></div>
+        <div class="row actions">
+          <button id="btn-translate-listen" class="primary">Translate from microphone</button>
+        </div>
+        <div class="row">
+          <label for="translate-file">Translate a recording</label>
+          <input type="file" id="translate-file" accept="audio/*" />
+        </div>
+        <div class="status" id="translate-status">Ready.</div>
+        <div class="hint" id="translate-live"></div>
+        <div id="translate-log" class="messages chat"></div>
+
+        <h3>Say it in any of them</h3>
+        <textarea id="translate-text" rows="2" placeholder="Type text to speak as SonicSpy, ggwave, Morse, DTMF or tap code…"></textarea>
+        <div class="row actions">
+          <select id="translate-as"></select>
+          <button id="btn-translate-play" class="primary">Play</button>
+          <button id="btn-translate-wav" class="ghost">Save as WAV</button>
+        </div>
+        <div class="status" id="translate-say-status"></div>
       </section>
 
       <!-- ------------------------------------------------------------ MUSIC -->
@@ -167,11 +246,73 @@
           <li>Go to <b>Send</b>, choose Text or File, then press <b>Broadcast loop</b>.</li>
           <li>On the other device open <b>Listen</b> and hold it near the speaker.</li>
         </ol>
+        <h3>Stealth</h3>
+        <p class="hint">
+          The Stealth profile moves the data to 17–18.6 kHz: above what most adults can hear, and above
+          almost everything in recorded music, so the song plays as normal and nobody hears the message.
+          Both devices must use Stealth, and the music is never dipped while it sends. It needs a speaker
+          and microphone that reach that high — most phones and laptops do, some cheap ones do not — and
+          children, pets and some young adults may still hear a faint whine.
+        </p>
+        <div class="row">
+          <button id="btn-stealth" class="ghost">Switch to Stealth</button>
+        </div>
         <p class="hint">
           Honest limits: louder, denser music makes the tones harder to hear, so raise the data
           level or leave ducking on. This survives music at ordinary listening levels, not a
           concert.
         </p>
+      </section>
+
+      <!-- ------------------------------------------------------------ CODES -->
+      <section class="panel" id="panel-codes">
+        <h2>Codes</h2>
+        <p class="hint">
+          Morse, tap code and DTMF keypad tones. Type text to see and hear its code, paste a code to
+          read it, or let the microphone decode one as someone sends it — a tone, a whistle, a radio,
+          or knuckles on a table. These are open signalling codes, not encryption.
+        </p>
+        <div class="sub-tabs">
+          <button class="sub-tab active" data-code="morse">Morse</button>
+          <button class="sub-tab" data-code="tap">Tap code</button>
+          <button class="sub-tab" data-code="dtmf">DTMF</button>
+        </div>
+
+        <label for="code-text">Text</label>
+        <textarea id="code-text" rows="2" placeholder="Type a message…"></textarea>
+        <label for="code-code">Code</label>
+        <textarea id="code-code" rows="2" class="mono" placeholder="… or paste a code to read it"></textarea>
+        <p class="hint" id="code-help"></p>
+
+        <div class="row options">
+          <label class="inline" data-for="morse">
+            Speed
+            <input type="number" id="code-wpm" value="18" min="5" max="40" /> wpm
+          </label>
+          <label class="inline" data-for="morse">
+            Pitch
+            <input type="number" id="code-pitch" value="700" min="300" max="1500" step="10" /> Hz
+          </label>
+          <label class="inline" data-for="tap" hidden>
+            One tap every
+            <input type="number" id="code-period" value="0.25" min="0.1" max="0.8" step="0.05" /> s
+          </label>
+        </div>
+
+        <div class="row actions">
+          <button id="btn-code-play" class="primary">Play</button>
+          <button id="btn-code-stop" class="danger">Stop</button>
+          <button id="btn-code-wav" class="ghost">Save as WAV</button>
+          <button id="btn-code-listen">Decode from microphone</button>
+        </div>
+        <div class="row">
+          <label for="code-file">Decode a recording</label>
+          <input type="file" id="code-file" accept="audio/*" />
+        </div>
+
+        <div class="status" id="code-status">Ready.</div>
+        <h3>Heard</h3>
+        <div class="messages"><div class="message-text" id="code-heard">Nothing yet.</div></div>
       </section>
 
       <!-- ----------------------------------------------------------- AGENTS -->
@@ -192,7 +333,17 @@ node tools/sonicspy-cli.mjs encode --file report.json --out report.wav --profile
 node tools/sonicspy-cli.mjs decode --in recording.wav --out-dir received/
 
 # Inspect the link without sending anything
-node tools/sonicspy-cli.mjs selftest --profile turbo</pre>
+node tools/sonicspy-cli.mjs selftest --profile turbo
+
+# Morse, tap code and DTMF, as text or as audio
+node tools/sonicspy-cli.mjs code --type morse --text "sos" --out sos.wav
+node tools/sonicspy-cli.mjs code --type morse --in recording.wav
+
+# Speak to a gibberlink agent, or in any other voice
+node tools/sonicspy-cli.mjs say --text "is it better now?" --as gg-fast --from AB --out gb.wav
+
+# Everything in a recording, one JSON event per line
+node tools/sonicspy-cli.mjs translate --in recording.wav --json</pre>
 
         <h3>Frame format</h3>
         <p class="hint">
@@ -206,7 +357,7 @@ node tools/sonicspy-cli.mjs selftest --profile turbo</pre>
           <tbody>
             <tr><td>preamble</td><td>16 symbols</td><td>alternating lowest and highest tone</td></tr>
             <tr><td>sync</td><td>3</td><td><code>a5 c3 5a</code></td></tr>
-            <tr><td>version</td><td>1</td><td>protocol version, currently 1</td></tr>
+            <tr><td>version</td><td>1</td><td>protocol version, currently 2</td></tr>
             <tr><td>flags</td><td>1</td><td>bit 0 binary payload, bit 1 gzip</td></tr>
             <tr><td>msg&nbsp;id</td><td>4</td><td>random per message, groups the chunks</td></tr>
             <tr><td>seq</td><td>2</td><td>frame counter within the message</td></tr>
@@ -214,7 +365,9 @@ node tools/sonicspy-cli.mjs selftest --profile turbo</pre>
             <tr><td>chunk total</td><td>2</td><td>how many pieces the message has</td></tr>
             <tr><td>payload length</td><td>2</td><td>bytes in this frame's payload</td></tr>
             <tr><td>payload</td><td>n</td><td>message bytes</td></tr>
-            <tr><td>CRC-16</td><td>2</td><td>CCITT-FALSE over version…payload; bad frames are dropped</td></tr>
+            <tr><td>header parity</td><td>8</td><td>Reed-Solomon over sync…payload length; repairs 4 bad bytes</td></tr>
+            <tr><td>CRC-16</td><td>2</td><td>CCITT-FALSE over version…payload; the final word on integrity</td></tr>
+            <tr><td>body parity</td><td>4+</td><td>Reed-Solomon over payload and CRC: a quarter of their size (half in robust)</td></tr>
           </tbody>
         </table>
 
@@ -245,7 +398,7 @@ node tools/sonicspy-cli.mjs selftest --profile turbo</pre>
         <h3>Tones for this profile</h3>
         <table class="spec" id="tone-table">
           <thead>
-            <tr><th>Symbol</th><th>Bits</th><th>Frequency</th></tr>
+            <tr><th>Symbol</th><th>Bits</th><th>Frequency in each tone set</th></tr>
           </thead>
           <tbody></tbody>
         </table>
@@ -256,7 +409,10 @@ node tools/sonicspy-cli.mjs selftest --profile turbo</pre>
           the sound is clean. The receiver measures the energy at each expected tone frequency with
           a Goertzel filter over a Hann window and takes the strongest — no carrier lock needed,
           only an estimate of where each symbol starts. A 16 symbol alternating preamble gives that
-          timing, and every frame is protected by a CRC.
+          timing. A room keeps ringing with each tone long after it stops, so consecutive symbols
+          rotate through interleaved tone sets and each tone is judged by how much it rose, not how
+          loud it is. Reed-Solomon parity repairs the symbols that still go wrong, and a CRC has the
+          final say.
         </p>
       </section>
     </main>

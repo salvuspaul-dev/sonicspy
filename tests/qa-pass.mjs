@@ -17,6 +17,11 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomFillSync } from 'node:crypto';
 
+import { CODES } from '../web/src/codes.js';
+import { toWav } from '../web/src/audio.js';
+import { speak } from '../web/src/translator.js';
+import { toGibberlink } from '../web/src/ggwave.js';
+
 const require = createRequire(import.meta.url);
 const PLAYWRIGHT =
   process.env.PLAYWRIGHT_PATH ||
@@ -156,8 +161,90 @@ check(
   oddEta,
 );
 
+/* --- codes: conversion both ways, decoding real recordings, playback -------- */
+await page.click('.tab[data-panel="codes"]');
+await page.fill('#code-text', 'sos help');
+check('text becomes Morse as it is typed', (await page.inputValue('#code-code')) === '... --- ... / .... . .-.. .--.');
+await page.fill('#code-code', '.-- .- - . .-.');
+check('pasted Morse becomes text', (await page.inputValue('#code-text')) === 'WATER');
+await page.click('[data-code="tap"]');
+check('switching to tap code re-encodes the text', (await page.inputValue('#code-code')) === '52 11 44 15 42');
+check('tap options replace Morse options', await page.locator('#code-period').isVisible() && !(await page.locator('#code-wpm').isVisible()));
+await page.click('[data-code="dtmf"]');
+await page.fill('#code-text', 'call 555-0199#');
+check('DTMF keeps keypad characters only', (await page.inputValue('#code-code')) === 'CA5550199#');
+
+/* Recordings are rendered here in Node and decoded by the page, so this
+ * exercises the browser's own audio decoder feeding the shipped decoders. */
+for (const [kind, text] of [['morse', 'MEET AT DAWN'], ['tap', 'WATER'], ['dtmf', '*123#']]) {
+  await page.click(`[data-code="${kind}"]`);
+  const wav = toWav(CODES[kind].samples(text, { fs: 48000 }), 48000);
+  await page.setInputFiles('#code-file', { name: `${kind}.wav`, mimeType: 'audio/wav', buffer: Buffer.from(wav) });
+  const heard = await waitForText(page, 'code-heard', new RegExp(text.replace(/[*#]/g, '\\$&')));
+  check(`a ${kind} recording decodes in the browser`, heard === text, heard);
+}
+
+await page.click('[data-code="morse"]');
+await page.fill('#code-text', 'e');
+await page.click('#btn-code-play');
+const played = await waitForText(page, 'code-status', /^Done\./);
+check('Morse plays to the end', /^Done\./.test(played), played);
+await page.fill('#code-text', '');
+await page.click('#btn-code-play');
+check('playing nothing is refused readably', /type something/i.test(await page.locator('#code-status').innerText()));
+
+await page.click('.tab[data-panel="music"]');
+await page.click('#btn-stealth');
+check('the stealth button selects the stealth profile', (await page.inputValue('#profile-select')) === 'stealth');
+check('the profile line shows the near-ultrasonic band', /17250–18563 Hz/.test(await page.locator('#profile-detail').innerText()));
+await page.selectOption('#profile-select', 'robust');
+
+/* --- translate: a recording of four protocols, decoded by the page --------- */
+await page.click('.tab[data-panel="translate"]');
+const mixed = [
+  await speak('agent alpha: meet at dock 7', 'sonicspy:fast', { fs: 48000 }),
+  await speak(toGibberlink('is it better now?', 'K9'), 'gg-fast', { fs: 48000 }),
+  await speak('*123#', 'dtmf', { fs: 48000 }),
+  await speak('SOS', 'morse', { fs: 48000 }),
+];
+const gap = new Float32Array(48000);
+const joined = new Float32Array(mixed.reduce((n, m) => n + m.length + gap.length, gap.length));
+let joinAt = gap.length;
+for (const m of mixed) {
+  joined.set(m, joinAt);
+  joinAt += m.length + gap.length;
+}
+await page.setInputFiles('#translate-file', { name: 'mixed.wav', mimeType: 'audio/wav', buffer: Buffer.from(toWav(joined, 48000)) });
+const translated = await waitForText(page, 'translate-status', /messages? found|nothing/, 20000);
+const transcript = (await page.locator('#translate-log .chat-line').allInnerTexts()).map((t) => t.replace(/^[^·]+· /, '').replace(/\s+/g, ' ')).reverse();
+check('a recording of four protocols is translated in the page', /4 messages found/.test(translated), translated);
+check(
+  'each protocol is named and decoded exactly',
+  JSON.stringify(transcript) === JSON.stringify(['SonicSpy fast agent alpha: meet at dock 7', 'ggwave / gibberlink from K9 is it better now?', 'DTMF *123#', 'Morse SOS']),
+  JSON.stringify(transcript),
+);
+await page.fill('#translate-text', 'ABCDE');
+await page.selectOption('#translate-as', 'gg-fast');
+await page.click('#btn-translate-wav');
+check('a message ggwave would garble is refused with a reason', /garble/.test(await waitForText(page, 'translate-say-status', /garble|Saved/)));
+/* No keypad character at all — "call" would still give C and A. */
+await page.fill('#translate-text', 'hello');
+await page.selectOption('#translate-as', 'dtmf');
+await page.click('#btn-translate-wav');
+check('text DTMF cannot carry at all is refused', /cannot carry/.test(await waitForText(page, 'translate-say-status', /cannot|Saved/)));
+await page.fill('#translate-text', 'hello agents');
+await page.selectOption('#translate-as', 'sonicspy:turbo');
+const [wavDownload] = await Promise.all([page.waitForEvent('download'), page.click('#btn-translate-wav')]);
+check('any voice can be saved as a WAV', /sonicspy-sonicspy-turbo\.wav/.test(wavDownload.suggestedFilename()), wavDownload.suggestedFilename());
+
+/* --- link: controls render and refuse what they cannot do yet -------------- */
+await page.click('.tab[data-panel="link"]');
+await page.click('#btn-link-say');
+check('sending before the link is open is refused readably', /open the link first/i.test(await page.locator('#link-status').innerText()));
+check('the link offers stealth as a preferred mode', (await page.locator('#link-mode option[value="stealth"]').count()) === 1);
+
 /* --- every panel still renders -------------------------------------------- */
-for (const tab of ['send', 'listen', 'music', 'agents', 'diag']) {
+for (const tab of ['send', 'listen', 'link', 'translate', 'music', 'codes', 'agents', 'diag']) {
   await page.click(`.tab[data-panel="${tab}"]`);
   check(`panel "${tab}" renders`, await page.locator(`#panel-${tab}`).isVisible());
 }
@@ -177,10 +264,22 @@ check(
   `scrollWidth ${overflow.scrollWidth} vs ${overflow.clientWidth}`,
 );
 
-for (const tab of ['send', 'listen', 'music', 'agents', 'diag']) {
+for (const tab of ['send', 'listen', 'link', 'translate', 'music', 'codes', 'agents', 'diag']) {
   await phone.click(`.tab[data-panel="${tab}"]`);
   check(`phone: panel "${tab}" opens`, await phone.locator(`#panel-${tab}`).isVisible());
 }
+
+for (const tab of ['link', 'translate']) {
+  await phone.click(`.tab[data-panel="${tab}"]`);
+  const over = await phone.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+  check(`phone: the ${tab} panel fits without sideways scrolling`, over <= 1, `${over}px over`);
+  await phone.screenshot({ path: join(shotDir, `mobile-${tab}.png`), fullPage: true });
+}
+
+await phone.click('.tab[data-panel="codes"]');
+const codesOverflow = await phone.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+check('phone: the codes panel fits without sideways scrolling', codesOverflow <= 1, `${codesOverflow}px over`);
+await phone.screenshot({ path: join(shotDir, 'mobile-codes.png'), fullPage: true });
 
 await phone.click('.tab[data-panel="send"]');
 await phone.fill('#send-text-input', 'phone width check');

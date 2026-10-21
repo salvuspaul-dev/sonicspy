@@ -69,8 +69,10 @@ export class SonicAudio {
   }
 
   /* Play one modulated block. Resolves when it has finished sounding. */
+  /* A new transmission replaces the one on air: two at once garble each other. */
   playSamples(samples, { volume = 1 } = {}) {
     return this.context().then((ctx) => {
+      this.stopTransmit();
       const buffer = ctx.createBuffer(1, samples.length, ctx.sampleRate);
       buffer.copyToChannel(samples, 0);
       const source = ctx.createBufferSource();

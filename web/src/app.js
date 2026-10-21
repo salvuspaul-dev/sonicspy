@@ -13,8 +13,10 @@ import {
   Demodulator,
   demodulateAll,
   toneFreq,
+  toneCount,
+  dataTone,
+  frameSymbols,
   bitsPerSymbol,
-  PREAMBLE_SYMBOLS,
 } from './modem.js';
 import {
   framesForText,
@@ -36,6 +38,8 @@ import {
   payloadBytesPerSecond,
 } from './transfer.js';
 import { SonicAudio, toWav } from './audio.js';
+import { CODES } from './codes.js';
+import { initLinkUi } from './ui-link.js';
 
 const audio = new SonicAudio();
 const $ = (id) => document.getElementById(id);
@@ -111,10 +115,11 @@ function renderProfileInfo() {
   const p = profile();
   const bps = bitsPerSymbol(p);
   const rate = payloadBytesPerSecond(p);
-  const highest = toneFreq(p, p.m - 1);
+  const highest = toneFreq(p, toneCount(p) - 1);
+  const sets = p.sets === 1 ? '1 tone set' : `${p.sets} rotating tone sets`;
   $('profile-rate').textContent = `${rate.toFixed(0)} bytes/s`;
   $('profile-detail').textContent =
-    `${p.m} tones · ${bps} bits/symbol · ${(1 / p.symbolSeconds).toFixed(0)} symbols/s · ` +
+    `${bps} bits/symbol · ${sets} · ${(1 / p.symbolSeconds).toFixed(0)} symbols/s · ` +
     `${toneFreq(p, 0).toFixed(0)}–${highest.toFixed(0)} Hz`;
   renderToneTable();
 }
@@ -136,7 +141,9 @@ function renderToneTable() {
     const bits = document.createElement('td');
     bits.textContent = i.toString(2).padStart(bitsPerSymbol(p), '0');
     const freq = document.createElement('td');
-    freq.textContent = `${toneFreq(p, i).toFixed(1)} Hz`;
+    const perSet = [];
+    for (let s = 0; s < p.sets; s++) perSet.push(toneFreq(p, dataTone(p, s, i)).toFixed(1));
+    freq.textContent = `${perSet.join(' · ')} Hz`;
     row.append(sym, bits, freq);
     body.append(row);
   }
@@ -188,10 +195,8 @@ async function buildFrames() {
 }
 
 function describeCost({ frames, repeats, label }) {
-  const totalFrames = frames.length * repeats;
-  const symbolsPerFrame =
-    PREAMBLE_SYMBOLS + Math.ceil(((17 + profile().chunkBytes + 2) * 8) / bitsPerSymbol(profile()));
-  const seconds = totalFrames * symbolsPerFrame * profile().symbolSeconds;
+  const symbols = frames.reduce((n, f) => n + frameSymbols(profile(), f.length), 0) * repeats;
+  const seconds = symbols * profile().symbolSeconds;
   $('send-eta').textContent = `${label} → ${frames.length} frame${frames.length === 1 ? '' : 's'} × ${repeats} repeat${repeats === 1 ? '' : 's'} ≈ ${formatDuration(seconds)} on air`;
   return seconds;
 }
@@ -260,7 +265,8 @@ async function transmitOnce({ frames, repeats }) {
 
   const samples = modulateFrames(repeatFrames, { fs, profile: profile() });
   setStatus($('send-status'), `On air: ${samples.length} samples at ${fs} Hz…`, '');
-  const wantsDuck = $('duck').checked && audio.musicSource;
+  /* Dipping the song would announce a stealth transmission to every listener. */
+  const wantsDuck = $('duck').checked && audio.musicSource && state.profile !== 'stealth';
   if (wantsDuck) audio.duck(true);
   await audio.playSamples(samples, { volume: parseFloat($('data-volume').value) });
   if (wantsDuck) audio.duck(false);
@@ -295,12 +301,12 @@ function restartDemodulator() {
 
 $('btn-listen').addEventListener('click', async () => {
   if (state.listening) {
-    audio.stopListening();
-    state.listening = false;
-    $('btn-listen').textContent = 'Start listening';
+    stopDataListening();
     setStatus($('listen-status'), 'Stopped.', '');
     return;
   }
+  stopCodeListening();
+  linkUi.stop();
   try {
     state.reassembler = new Reassembler({
       onProgress: renderPending,
@@ -313,11 +319,21 @@ $('btn-listen').addEventListener('click', async () => {
     state.listening = true;
     $('btn-listen').textContent = 'Stop listening';
     setStatus($('listen-status'), `Listening at ${fs} Hz — every frame passing CRC is shown below.`, 'ok');
-    $('device-info').textContent = `capture ${fs} Hz · ${profile().m} tones · squelch ${$('squelch').value}`;
+    $('device-info').textContent = `capture ${fs} Hz · ${toneCount(profile())} tones · squelch ${$('squelch').value}`;
   } catch (err) {
     setStatus($('listen-status'), `Microphone unavailable: ${err.message}`, 'error');
   }
 });
+
+/* The microphone feeds one consumer at a time: the data receiver here, or a
+ * code decoder on the Codes tab. Starting either stops the other. */
+function stopDataListening() {
+  if (!state.listening) return;
+  audio.stopListening();
+  state.listening = false;
+  $('btn-listen').textContent = 'Start listening';
+  setStatus($('listen-status'), 'Not listening.', '');
+}
 
 $('squelch').addEventListener('input', () => {
   if (state.demod) state.demod.squelch = parseFloat($('squelch').value);
@@ -423,13 +439,13 @@ function drawSpectrum() {
 
   const p = profile();
   const minHz = 300;
-  const maxHz = 5000;
+  const maxHz = toneFreq(p, toneCount(p) - 1) + 500;
   const xFor = (hz) => ((hz - minHz) / (maxHz - minHz)) * width;
 
   /* Tone grid for the active profile. */
   ctx2d.strokeStyle = 'rgba(120, 200, 255, 0.22)';
   ctx2d.lineWidth = 1;
-  for (let i = 0; i < p.m; i++) {
+  for (let i = 0; i < toneCount(p); i++) {
     const x = xFor(toneFreq(p, i));
     if (x < 0 || x > width) continue;
     ctx2d.beginPath();
@@ -455,8 +471,8 @@ function drawSpectrum() {
 
   ctx2d.fillStyle = 'rgba(148, 163, 184, 0.9)';
   ctx2d.font = '11px ui-monospace, monospace';
-  ctx2d.fillText('300 Hz', 4, 12);
-  ctx2d.fillText('5000 Hz', width - 54, 12);
+  ctx2d.fillText(`${minHz} Hz`, 4, 12);
+  ctx2d.fillText(`${Math.round(maxHz)} Hz`, width - 54, 12);
   ctx2d.fillText(state.listening ? 'live microphone' : 'output', 4, height - 6);
 }
 drawSpectrum();
@@ -497,6 +513,151 @@ $('btn-music-stop').addEventListener('click', () => {
 
 $('music-volume').addEventListener('input', (e) => audio.setMusicVolume(parseFloat(e.target.value)));
 $('data-volume').addEventListener('input', (e) => audio.setDataVolume(parseFloat(e.target.value)));
+
+$('btn-stealth').addEventListener('click', () => {
+  $('profile-select').value = 'stealth';
+  $('profile-select').dispatchEvent(new Event('change'));
+  setStatus($('music-status'), 'Stealth profile on. The receiving device must select Stealth too.', 'ok');
+});
+
+/* ---------------------------------------------------------------- codes */
+
+const codeState = { kind: 'morse', decoder: null, listening: false };
+
+const CODE_HELP = {
+  morse: 'Dots and dashes; letters split by spaces, words by " / ". Pastes with · • – — work too.',
+  tap: 'Row then column on the 5×5 square, e.g. "52 11" is WA; words split by " / ". K is sent as C.',
+  dtmf: 'Phone keypad tones: 0–9, *, #, A–D. Anything else is left out.',
+};
+
+function codeOptions() {
+  const number = (id, fallback) => {
+    const v = parseFloat($(id).value);
+    return Number.isFinite(v) ? v : fallback;
+  };
+  return {
+    wpm: Math.min(40, Math.max(5, number('code-wpm', 18))),
+    freq: Math.min(1500, Math.max(300, number('code-pitch', 700))),
+    period: Math.min(0.8, Math.max(0.1, number('code-period', 0.25))),
+  };
+}
+
+function selectCode(kind) {
+  stopCodeListening();
+  codeState.kind = kind;
+  for (const tab of document.querySelectorAll('[data-code]')) tab.classList.toggle('active', tab.dataset.code === kind);
+  for (const label of document.querySelectorAll('[data-for]')) label.hidden = label.dataset.for !== kind;
+  $('code-help').textContent = CODE_HELP[kind];
+  $('code-code').value = CODES[kind].toCode($('code-text').value);
+}
+
+for (const tab of document.querySelectorAll('[data-code]')) {
+  tab.addEventListener('click', () => selectCode(tab.dataset.code));
+}
+
+$('code-text').addEventListener('input', () => {
+  $('code-code').value = CODES[codeState.kind].toCode($('code-text').value);
+});
+
+$('code-code').addEventListener('input', () => {
+  $('code-text').value = CODES[codeState.kind].toText($('code-code').value);
+});
+
+async function codeAudio() {
+  const text = $('code-text').value;
+  if (!CODES[codeState.kind].toCode(text)) {
+    throw new Error(`Type something ${CODES[codeState.kind].label} can carry first.`);
+  }
+  await audio.context();
+  const fs = audio.sampleRate;
+  return { fs, samples: CODES[codeState.kind].samples(text, { fs, ...codeOptions() }) };
+}
+
+$('btn-code-play').addEventListener('click', async () => {
+  try {
+    const { fs, samples } = await codeAudio();
+    setStatus($('code-status'), `Playing ${CODES[codeState.kind].label} (${formatDuration(samples.length / fs)})…`, '');
+    await audio.playSamples(samples);
+    setStatus($('code-status'), 'Done.', 'ok');
+  } catch (err) {
+    setStatus($('code-status'), err.message, 'error');
+  }
+});
+
+$('btn-code-stop').addEventListener('click', () => {
+  audio.stopTransmit();
+  setStatus($('code-status'), 'Stopped.', '');
+});
+
+$('btn-code-wav').addEventListener('click', async () => {
+  try {
+    const { fs, samples } = await codeAudio();
+    download(toWav(samples, fs), `sonicspy-${codeState.kind}.wav`, 'audio/wav');
+    setStatus($('code-status'), 'Saved.', 'ok');
+  } catch (err) {
+    setStatus($('code-status'), err.message, 'error');
+  }
+});
+
+function newCodeDecoder(fs) {
+  $('code-heard').textContent = '';
+  return new CODES[codeState.kind].Decoder({
+    fs,
+    ...codeOptions(),
+    freq: 'auto',
+    onText: (_, text) => {
+      $('code-heard').textContent = text;
+    },
+  });
+}
+
+function stopCodeListening() {
+  if (!codeState.listening) return;
+  audio.stopListening();
+  codeState.listening = false;
+  codeState.decoder?.flush();
+  $('btn-code-listen').textContent = 'Decode from microphone';
+  setStatus($('code-status'), 'Stopped listening.', '');
+}
+
+$('btn-code-listen').addEventListener('click', async () => {
+  if (codeState.listening) {
+    stopCodeListening();
+    return;
+  }
+  stopDataListening();
+  linkUi.stop();
+  try {
+    let decoder = null;
+    const fs = await audio.startListening((chunk) => decoder?.push(chunk));
+    decoder = newCodeDecoder(fs);
+    codeState.decoder = decoder;
+    codeState.listening = true;
+    $('btn-code-listen').textContent = 'Stop decoding';
+    setStatus($('code-status'), `Listening for ${CODES[codeState.kind].label} at ${fs} Hz…`, 'ok');
+  } catch (err) {
+    setStatus($('code-status'), `Microphone unavailable: ${err.message}`, 'error');
+  }
+});
+
+$('code-file').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  try {
+    const buffer = await audio.loadMusic(file);
+    const decoder = newCodeDecoder(buffer.sampleRate);
+    decoder.push(buffer.getChannelData(0));
+    decoder.flush();
+    const text = decoder.text.trim();
+    $('code-heard').textContent = text || 'Nothing recognisable in that recording.';
+    setStatus($('code-status'), `Decoded ${file.name} as ${CODES[codeState.kind].label}.`, text ? 'ok' : 'error');
+  } catch (err) {
+    setStatus($('code-status'), `Could not decode that audio: ${err.message}`, 'error');
+  }
+  e.target.value = '';
+});
+
+selectCode('morse');
 
 /* ------------------------------------------------------------ self-test */
 
@@ -548,6 +709,16 @@ $('btn-selftest').addEventListener('click', () => {
 });
 
 /* ------------------------------------------------------------------ init */
+
+/* The microphone feeds one tab at a time; Link and Translate take it from the others. */
+const linkUi = initLinkUi({
+  audio,
+  download,
+  stopOthers: () => {
+    stopDataListening();
+    stopCodeListening();
+  },
+});
 
 renderProfileInfo();
 setStatus($('send-status'), 'Ready.', '');

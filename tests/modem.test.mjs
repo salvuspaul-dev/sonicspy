@@ -19,6 +19,8 @@ import {
   bytesFromSymbols,
   bitsPerSymbol,
   crc16,
+  DEFAULT_SQUELCH,
+  SQUELCH_MIN,
 } from '../web/src/modem.js';
 import {
   buildFrame,
@@ -146,6 +148,29 @@ for (const [name, profile] of Object.entries(PROFILES)) {
     assert.deepEqual([...frames[0]], [...frame]);
   });
 
+  /* A real recording never starts on the receiver's search grid. Every test
+   * above begins the signal at sample 0, which hid a timing lock up to half a
+   * symbol early: the hard preamble count saturates long before alignment is
+   * right, and data symbols are then read straddling two tones. */
+  test(`[${name}] locks symbol timing when the signal starts off the search grid`, () => {
+    const rand = mulberry32(42);
+    const payload = Uint8Array.from({ length: profile.chunkBytes }, () => (rand() * 256) | 0);
+    const frame = buildFrame({ msgId: 0x0ff9e1d, payload });
+    const audio = modulateFrames([frame], { fs: FS, profile });
+    const N = Math.round(FS * profile.symbolSeconds);
+    /* Sweep a full symbol of start offsets so the worst case — detection on the
+     * grid point almost half a symbol before the true start — is always hit. */
+    for (let k = 0; k < 16; k++) {
+      const lead = 6000 + Math.round((k * N) / 16);
+      const shifted = new Float32Array(lead + audio.length + 4800);
+      shifted.set(audio, lead);
+      const noisy = addNoise(shifted, 2, 100 + k);
+      const { frames } = decodeOnce(noisy, profile, 0.05);
+      assert.ok(frames.length >= 1, `frame decoded with signal starting ${lead} samples in`);
+      assert.deepEqual([...frames[0]], [...frame]);
+    }
+  });
+
   test(`[${name}] survives music-like interference at equal loudness`, () => {
     const { frame } = makeTestFrame('through the music');
     const audio = modulateFrames([frame], { fs: FS, profile });
@@ -250,5 +275,58 @@ test('a frame corrupted beyond CRC is dropped rather than delivered', () => {
    * never emit bytes that differ from the original. */
   for (const f of delivered) {
     assert.deepEqual([...f], [...frame], 'any delivered frame must be intact');
+  }
+});
+
+/* The squelch is only a level gate. Since headers carry Reed-Solomon parity
+ * and must then match the sync word, with a CRC behind that, a receiver can
+ * listen at the faintest setting without noise or music ever becoming a
+ * message — which matters, because a speaker a metre away reaches a phone
+ * microphone far below the old default gate. This also bounds the cost of
+ * listening that low: noise must be processed well faster than real time. */
+test('at the faintest squelch the app offers, noise and music never become frames, and decode keeps up', () => {
+  const seconds = 6;
+  const rand = mulberry32(77);
+  const hiss = Float32Array.from({ length: FS * seconds }, () => (rand() * 2 - 1) * 0.3);
+  const noise = addMusic(hiss, 1, 31);
+  for (const [name, profile] of Object.entries(PROFILES)) {
+    const started = performance.now();
+    const { frames, stats } = decodeOnce(noise, profile, SQUELCH_MIN);
+    const elapsed = (performance.now() - started) / 1000;
+    assert.equal(frames.length, 0, `${name} turned noise into a frame`);
+    assert.equal(stats.crcFailures, 0, `${name} got as far as a CRC on noise`);
+    assert.ok(elapsed < seconds / 2, `${name} took ${elapsed.toFixed(2)} s for ${seconds} s of noise`);
+  }
+});
+
+/* Measured on a real phone (RedMagic, Android 16) half a metre from laptop
+ * speakers at two-thirds volume: the 7 kHz preamble tone arrived near -46 dBFS
+ * with the room some 35 dB below it. A fixed gate of 0.02 (-34 dBFS) threw that
+ * clean frame away, so the default must sit far lower and lean on the
+ * noise-relative test instead. */
+test('a clean but faint frame, as a phone mic hears a laptop speaker, decodes at the default squelch', () => {
+  for (const [name, profile] of Object.entries(PROFILES)) {
+    const { frame } = makeTestFrame(`faint ${name}`);
+    const audio = modulateFrames([frame], { fs: FS, profile });
+    let peak = 0;
+    for (const s of audio) peak = Math.max(peak, Math.abs(s));
+    const faint = addNoise(audio.map((s) => (s / peak) * 0.005), 30, 9);
+    const { frames } = decodeOnce(faint, profile, DEFAULT_SQUELCH);
+    assert.equal(frames.length, 1, `${name}: faint frame was gated out`);
+    assert.deepEqual([...frames[0]], [...frame]);
+  }
+});
+
+/* Stealth is meant to sit far below the song it rides in. Here the music bed
+ * is ten times the data's level (20 dB louder) and broadband hiss — cymbals,
+ * tape, room — matches the data's own level across the whole spectrum. */
+test('[stealth] decodes under a song 20 dB louder than the data, with hiss', () => {
+  for (let seed = 1; seed <= 4; seed++) {
+    const { frame } = makeTestFrame('under the music');
+    const audio = modulateFrames([frame], { fs: FS, profile: PROFILES.stealth });
+    const mixed = addMusic(addNoise(audio, 0, seed + 40), 10, seed);
+    const { frames } = decodeOnce(mixed, PROFILES.stealth, 0.02);
+    assert.ok(frames.length >= 1, `seed ${seed}: frame lost under the music`);
+    assert.deepEqual([...frames[0]], [...frame]);
   }
 });

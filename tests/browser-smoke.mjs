@@ -64,7 +64,7 @@ const rate = await page.locator('#profile-rate').innerText();
 check('app module initialised and computed the profile rate', /bytes\/s/.test(rate), rate);
 
 /* 3. Every tab switches panels. */
-for (const tab of ['send', 'listen', 'music', 'agents', 'diag']) {
+for (const tab of ['send', 'listen', 'music', 'codes', 'agents', 'diag']) {
   await page.click(`.tab[data-panel="${tab}"]`);
   const visible = await page.locator(`#panel-${tab}`).isVisible();
   check(`tab "${tab}" opens its panel`, visible);
@@ -90,6 +90,7 @@ for (const [value, label] of [
   ['robust', 'Robust'],
   ['fast', 'Fast'],
   ['turbo', 'Turbo'],
+  ['stealth', 'Stealth'],
 ]) {
   await page.selectOption('#profile-select', value);
   const payload = `browser check ${label}`;

@@ -9,7 +9,8 @@
 
 import { SYNC_BYTES, PREFIX_BYTES, CRC_BYTES, PLEN_OFFSET, crc16 } from './modem.js';
 
-export const VER = 1;
+/* 2: frames carry Reed-Solomon parity and rotate tone sets on air. */
+export const VER = 2;
 export const FLAG_BINARY = 0x01;
 export const FLAG_GZIP = 0x02;
 

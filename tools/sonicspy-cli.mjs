@@ -22,7 +22,9 @@ import {
   modulateFrames,
   demodulateAll,
   bitsPerSymbol,
-  PREAMBLE_SYMBOLS,
+  toneCount,
+  frameSymbols,
+  DEFAULT_SQUELCH,
 } from '../web/src/modem.js';
 import {
   framesForText,
@@ -44,6 +46,9 @@ import {
   payloadBytesPerSecond,
 } from '../web/src/transfer.js';
 import { toWav, fromWav } from '../web/src/audio.js';
+import { CODES } from '../web/src/codes.js';
+import { Translator, CHANNELS, DEFAULT_CHANNELS, VOICES, speak } from '../web/src/translator.js';
+import { toGibberlink } from '../web/src/ggwave.js';
 
 const FS = 48000;
 
@@ -118,10 +123,9 @@ async function encode(args) {
   const samples = modulateFrames(repeated, { fs, profile });
   await writeFile(out, toWav(samples, fs));
 
-  const symbolsPerFrame = PREAMBLE_SYMBOLS + Math.ceil(((17 + chunkBytes + 2) * 8) / bitsPerSymbol(profile));
-  const seconds = repeated.length * symbolsPerFrame * profile.symbolSeconds;
+  const seconds = repeated.reduce((n, f) => n + frameSymbols(profile, f.length), 0) * profile.symbolSeconds;
 
-  console.log(`profile   ${profile.label} (${profile.m} tones, ${(payloadBytesPerSecond(profile)).toFixed(0)} B/s)`);
+  console.log(`profile   ${profile.label} (${toneCount(profile)} tones, ${(payloadBytesPerSecond(profile)).toFixed(0)} B/s)`);
   console.log(`payload   ${summary}`);
   console.log(`frames    ${frames.length} × ${repeats} repeats`);
   console.log(`on air    ${formatDuration(seconds)}`);
@@ -145,7 +149,7 @@ async function decode(args) {
     const { frames: decoded, stats } = demodulateAll(samples, {
       fs: sampleRate,
       profile,
-      squelch: Number(args.squelch || 0.08),
+      squelch: Number(args.squelch || DEFAULT_SQUELCH),
       expectedFrameBytes,
     });
     for (const frame of decoded) reassembler.accept(frame);
@@ -205,6 +209,42 @@ async function decode(args) {
   }
 }
 
+/* Morse, tap code and DTMF: text <-> written code, text -> WAV, WAV -> text. */
+async function code(args) {
+  const kind = args.type || 'morse';
+  const codec = CODES[kind];
+  if (!codec) throw new Error(`unknown code "${kind}" — try: ${Object.keys(CODES).join(', ')}`);
+  const options = {
+    fs: FS,
+    wpm: Number(args.wpm || 18),
+    freq: Number(args.freq || 700),
+    period: Number(args.period || 0.25),
+  };
+
+  if (args.in) {
+    const buffer = await readFile(args.in);
+    const { samples, sampleRate } = fromWav(buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength));
+    const decoder = new codec.Decoder({ ...options, fs: sampleRate, freq: args.freq ? options.freq : 'auto' });
+    decoder.push(samples);
+    decoder.flush();
+    console.log(decoder.text.trim());
+    return;
+  }
+  if (typeof args.code === 'string') {
+    console.log(codec.toText(args.code));
+    return;
+  }
+  if (typeof args.text !== 'string') throw new Error('code needs --text "..." , --code "..." or --in recording.wav');
+  const written = codec.toCode(args.text);
+  if (!written) throw new Error(`nothing in that text can be sent as ${codec.label}`);
+  console.log(written);
+  if (args.out) {
+    const samples = codec.samples(args.text, options);
+    await writeFile(args.out, toWav(samples, FS));
+    console.log(`wrote     ${args.out} (${formatDuration(samples.length / FS)} of audio)`);
+  }
+}
+
 function selftest(args) {
   const profile = resolveProfile(args.profile);
   const text = args.text ? String(args.text) : 'sonicspy link check';
@@ -248,8 +288,45 @@ function selftest(args) {
     results.push(check(noisy, `${snr} dB signal to noise`));
   }
 
-  console.log(`profile   "${args.profile || 'robust'}" · ${profile.m} tones · ${formatDuration((Date.now() - started) / 1000)} elapsed`);
+  console.log(`profile   "${args.profile || 'robust'}" · ${toneCount(profile)} tones · ${formatDuration((Date.now() - started) / 1000)} elapsed`);
   if (results.some((r) => !r)) process.exitCode = 1;
+}
+
+/* Text in any voice: SonicSpy, ggwave/gibberlink or a code. */
+async function say(args) {
+  const voice = args.as || 'sonicspy:fast';
+  if (typeof args.text !== 'string') throw new Error(`say needs --text "..." and --as one of: ${VOICES.map((v) => v.id).join(', ')}`);
+  const text = args.from ? toGibberlink(args.text, String(args.from)) : args.text;
+  const samples = await speak(text, voice, { fs: FS });
+  const out = args.out || `sonicspy-${voice.replace(':', '-')}.wav`;
+  await writeFile(out, toWav(samples, FS));
+  console.log(`wrote     ${out} (${formatDuration(samples.length / FS)} of ${voice})`);
+}
+
+/* Everything recognisable in a recording, in order. --json prints one event
+ * per line for agents. */
+async function translate(args) {
+  if (!args.in) throw new Error('translate needs --in <recording.wav>');
+  const buffer = await readFile(args.in);
+  const { samples, sampleRate } = fromWav(buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength));
+  const channels = args.channels ? String(args.channels).split(',') : DEFAULT_CHANNELS;
+  for (const c of channels) if (!CHANNELS[c]) throw new Error(`unknown channel ${c}; use ${Object.keys(CHANNELS).join(',')}`);
+  const events = [];
+  const t = await Translator.create({ fs: sampleRate, channels, onEvent: (e) => e.kind !== 'partial' && events.push(e) });
+  for (let i = 0; i < samples.length; i += 4096) t.push(samples.subarray(i, i + 4096));
+  t.flush();
+  t.close();
+  await new Promise((r) => setTimeout(r, 50));
+  for (const e of events) {
+    const what = e.kind === 'file' ? `file ${e.file.name} (${formatBytes(e.file.data.length)})`
+      : e.kind === 'binary' ? `${formatBytes(e.bytes.length)} binary ${toHex(e.bytes.slice(0, 32))}` : e.text;
+    if (args.json) {
+      console.log(JSON.stringify({ at: +e.at.toFixed(2), channel: e.channel, mode: e.mode, sender: e.sender, kind: e.kind, text: e.kind === 'text' ? e.text : what }));
+    } else {
+      console.log(`${e.at.toFixed(1).padStart(6)} s  ${`${CHANNELS[e.channel]}${e.mode ? ` ${e.mode}` : ''}${e.sender ? ` from ${e.sender}` : ''}`.padEnd(26)} ${what}`);
+    }
+  }
+  if (!events.length && !args.json) console.log(`nothing recognisable in ${args.in}`);
 }
 
 function profiles() {
@@ -257,7 +334,7 @@ function profiles() {
     const rate = payloadBytesPerSecond(profile);
     const { seconds } = estimateTransfer({ bytes: 1024, profile });
     console.log(
-      `${name.padEnd(8)} ${profile.m} tones  ${bitsPerSymbol(profile)} bits/symbol  ` +
+      `${name.padEnd(8)} ${toneCount(profile)} tones  ${bitsPerSymbol(profile)} bits/symbol  ` +
         `${rate.toFixed(0)} B/s  1 KB ≈ ${formatDuration(seconds)}`
     );
   }
@@ -276,8 +353,17 @@ async function main() {
     case 'selftest':
       selftest(args);
       break;
+    case 'code':
+      await code(args);
+      break;
     case 'profiles':
       profiles();
+      break;
+    case 'say':
+      await say(args);
+      break;
+    case 'translate':
+      await translate(args);
       break;
     default:
       console.log(
@@ -285,11 +371,16 @@ async function main() {
           'sonicspy — data over sound',
           '',
           'usage:',
-          '  encode --text "hello" --out hello.wav [--profile robust|fast|turbo] [--repeats 2]',
+          '  encode --text "hello" --out hello.wav [--profile robust|fast|turbo|stealth] [--repeats 2]',
           '  encode --file ./report.json --out report.wav [--profile turbo]',
           '  encode --hex a5c35a --out payload.wav',
           '  decode --in recording.wav [--out-dir ./received] [--profile fast]',
           '  selftest [--profile fast] [--text "custom payload"]',
+          '  code --type morse|tap|dtmf --text "sos" [--out sos.wav] [--wpm 18] [--freq 700] [--period 0.25]',
+          '  code --type morse --code "... --- ..."',
+          '  code --type morse --in recording.wav',
+          '  say --text "is it better now?" --as gg-fast [--from AB] [--out msg.wav]   (any voice: sonicspy:turbo, gg-fast, morse, dtmf…)',
+          '  translate --in recording.wav [--channels sonicspy,ggwave,dtmf,morse,tap] [--json]',
           '  profiles',
         ].join('\n')
       );
