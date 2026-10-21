@@ -48,7 +48,8 @@ export const CHANNELS = {
   tap: 'Tap code',
 };
 
-export const DEFAULT_CHANNELS = ['sonicspy', 'ggwave', 'dtmf', 'morse'];
+/* Morse and tap code key on room noise (a fan, a hum), so they are opt-in. */
+export const DEFAULT_CHANNELS = ['sonicspy', 'ggwave', 'dtmf'];
 
 /* Rhythm codes have no end marker; this much quiet closes an utterance. */
 const UTTERANCE_GAP_SECONDS = 3;

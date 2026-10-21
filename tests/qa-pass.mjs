@@ -201,6 +201,8 @@ await page.selectOption('#profile-select', 'robust');
 
 /* --- translate: a recording of four protocols, decoded by the page --------- */
 await page.click('.tab[data-panel="translate"]');
+/* Morse is opt-in, as it keys on room noise. */
+await page.check('#translate-channels input[value="morse"]');
 const mixed = [
   await speak('agent alpha: meet at dock 7', 'sonicspy:fast', { fs: 48000 }),
   await speak(toGibberlink('is it better now?', 'K9'), 'gg-fast', { fs: 48000 }),

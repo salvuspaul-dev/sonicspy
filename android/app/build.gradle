@@ -16,8 +16,21 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    /* The upload key lives outside the repo, in ~/.gradle/gradle.properties.
+     * Without it, release builds come out unsigned. */
+    signingConfigs {
+        release {
+            if (project.hasProperty('SONICSPY_UPLOAD_STORE_FILE')) {
+                storeFile file(SONICSPY_UPLOAD_STORE_FILE)
+                storePassword SONICSPY_UPLOAD_STORE_PASSWORD
+                keyAlias SONICSPY_UPLOAD_KEY_ALIAS
+                keyPassword SONICSPY_UPLOAD_KEY_PASSWORD
+            }
+        }
+    }
     buildTypes {
         release {
+            if (project.hasProperty('SONICSPY_UPLOAD_STORE_FILE')) signingConfig signingConfigs.release
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }

@@ -63,7 +63,7 @@ Speed is a wash at the top end; the differences are integrity, length, files and
 
 ## Translator
 
-The **Translate** tab listens for SonicSpy (all four modes), ggwave/gibberlink, DTMF and Morse at once; tap code can be switched on. Each message appears once, labelled with its protocol and, for gibberlink, its sender id. Morse and tap code are read from rhythm alone, so the tones of every other protocol look like Morse to them: while a structured protocol is on air their letters are set aside, and their decoders restart afterwards. On the phone the whole translator uses about 5% of one core's real time.
+The **Translate** tab listens for SonicSpy (all four modes), ggwave/gibberlink and DTMF at once; Morse and tap code can be switched on, since in a noisy room (a fan, a hum) they write down noise. Each message appears once, labelled with its protocol and, for gibberlink, its sender id. Morse and tap code are read from rhythm alone, so the tones of every other protocol look like Morse to them: while a structured protocol is on air their letters are set aside, and their decoders restart afterwards. On the phone the whole translator uses about 5% of one core's real time.
 
 The same tab speaks: type text and play it, or save it as a WAV, as any SonicSpy mode, any ggwave protocol, Morse, DTMF or tap code.
 
@@ -159,7 +159,11 @@ cd android
 ./gradlew assembleDebug
 ```
 
-The result lands in `android/app/build/outputs/apk/debug/`. To produce a properly signed release build, generate your own keystore and add a `signingConfigs` block to `android/app/build.gradle` — never reuse the debug key, and never commit a keystore to the repository.
+The result lands in `android/app/build/outputs/apk/debug/`.
+
+For a signed release (`./gradlew bundleRelease` for Google Play, `assembleRelease` for an APK), generate your own keystore outside the repository and put these four properties in `~/.gradle/gradle.properties`: `SONICSPY_UPLOAD_STORE_FILE`, `SONICSPY_UPLOAD_KEY_ALIAS`, `SONICSPY_UPLOAD_STORE_PASSWORD`, `SONICSPY_UPLOAD_KEY_PASSWORD`. Without them, release builds come out unsigned. Never commit a keystore.
+
+The icon, splash screens and store graphics are rendered from `tools/brand/mark.svg` by `node tools/make-store-assets.mjs`; the Play listing text lives in `store/listing.md` and the privacy policy in `web/privacy.html`.
 
 `android/local.properties` must point at your Android SDK (`sdk.dir=...`). It is gitignored, because it is machine-specific.
 
