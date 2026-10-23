@@ -8,11 +8,16 @@
  */
 
 import { SYNC_BYTES, PREFIX_BYTES, CRC_BYTES, PLEN_OFFSET, crc16 } from './modem.js';
+import { coefficients, Solver, unit } from './fountain.js';
 
 /* 2: frames carry Reed-Solomon parity and rotate tone sets on air. */
 export const VER = 2;
 export const FLAG_BINARY = 0x01;
 export const FLAG_GZIP = 0x02;
+/* Repair frame of the fountain code in fountain.js: chunkIndex >= chunkTotal. */
+export const FLAG_FOUNTAIN = 0x04;
+/* A Link delivery receipt (link.js), not a message for people. */
+export const FLAG_ACK = 0x08;
 
 function writeU16(buf, at, value) {
   buf[at] = (value >> 8) & 0xff;
@@ -111,6 +116,41 @@ export function framesForMessage({ id = randomId(), bytes, flags = 0, chunkBytes
   return { id, frames, chunkTotal: total };
 }
 
+/* `count` fountain repair frames for a message, numbered from `from` past
+ * its chunks. Each carries the message length, then the XOR of the chunks
+ * coefficients() picks, zero-padded to the first chunk's size. */
+export function repairFrames(frames, count, from = 0) {
+  const chunks = frames.map(parseFrame);
+  const { msgId, flags, chunkTotal: K } = chunks[0];
+  const size = chunks[0].payload.length;
+  const length = chunks.reduce((n, c) => n + c.payload.length, 0);
+  const out = [];
+  for (let r = 0; r < count; r++) {
+    const id = K + ((from + r) % (0x10000 - K));
+    const coef = coefficients(msgId, id, K);
+    const payload = new Uint8Array(4 + size);
+    writeU32(payload, 0, length);
+    for (let i = 0; i < K; i++) {
+      if (!((coef[i >>> 5] >>> (i & 31)) & 1)) continue;
+      const part = chunks[i].payload;
+      for (let j = 0; j < part.length; j++) payload[4 + j] ^= part[j];
+    }
+    out.push(buildFrame({ flags: flags | FLAG_FOUNTAIN, msgId, seq: id, chunkIndex: id, chunkTotal: K, payload }));
+  }
+  return out;
+}
+
+/* What goes on air for `repeats` passes over a message. Plain passes repeat
+ * the chunks, which every build understands. Fountain passes (Wave, which
+ * older builds cannot hear anyway) send fresh repair frames instead, so any
+ * chunkTotal + 2 or so frames that survive rebuild the message. `pass` moves
+ * a looping broadcast on to repair frames it has not sent yet. */
+export function onAir(frames, repeats, { fountain = false, pass = 0 } = {}) {
+  if (!fountain) return Array.from({ length: repeats }, () => frames).flat();
+  const extra = (repeats - 1) * frames.length;
+  return [...frames, ...repairFrames(frames, extra, pass * extra)];
+}
+
 export function framesForText(text, opts = {}) {
   return framesForMessage({
     ...opts,
@@ -167,16 +207,20 @@ export class Reassembler {
     /* A frame numbering itself outside its own declared total can never belong
      * to a message being assembled, and reading a sparse map by position would
      * run past what actually arrived. Anyone in earshot can send one. */
-    if (frame.chunkTotal === 0 || frame.chunkIndex >= frame.chunkTotal) return 'stale';
+    const repair = frame.chunkIndex >= frame.chunkTotal;
+    if (frame.chunkTotal === 0) return 'stale';
+    if (repair && (!(frame.flags & FLAG_FOUNTAIN) || frame.payload.length < 4)) return 'stale';
 
     let entry = this.messages.get(frame.msgId);
     if (!entry) {
       this.#makeRoom();
       entry = {
         id: frame.msgId,
-        flags: frame.flags,
+        flags: frame.flags & ~FLAG_FOUNTAIN,
         total: frame.chunkTotal,
         parts: new Map(),
+        repairs: new Set(),
+        solver: null,
         lastSeen: now,
         createdAt: now,
         frames: 0,
@@ -191,22 +235,43 @@ export class Reassembler {
      * disagree with it are not part of this message. */
     if (frame.chunkTotal !== entry.total) return 'stale';
 
-    if (entry.parts.has(frame.chunkIndex)) return 'duplicate';
-    entry.parts.set(frame.chunkIndex, frame.payload);
+    if (repair) {
+      if (entry.repairs.has(frame.chunkIndex)) return 'duplicate';
+      const size = frame.payload.length - 4;
+      if (!entry.solver) {
+        entry.solver = new Solver(entry.total, size);
+        entry.length = Math.min(readU32(frame.payload, 0), entry.total * size);
+        for (const [i, part] of entry.parts) entry.solver.add(unit(i, entry.total), part);
+      }
+      if (size !== entry.solver.size) return 'stale';
+      entry.repairs.add(frame.chunkIndex);
+      entry.solver.add(coefficients(frame.msgId, frame.chunkIndex, entry.total), frame.payload.subarray(4));
+    } else {
+      if (entry.parts.has(frame.chunkIndex)) return 'duplicate';
+      entry.parts.set(frame.chunkIndex, frame.payload);
+      entry.solver?.add(unit(frame.chunkIndex, entry.total), frame.payload);
+    }
 
-    if (entry.parts.size < entry.total) {
+    if ((entry.solver?.rank ?? entry.parts.size) < entry.total) {
       this.onProgress(entry);
       return 'progress';
     }
 
-    let length = 0;
-    for (let i = 0; i < entry.total; i++) length += entry.parts.get(i).length;
-    const joined = new Uint8Array(length);
-    let at = 0;
-    for (let i = 0; i < entry.total; i++) {
-      const part = entry.parts.get(i);
-      joined.set(part, at);
-      at += part.length;
+    let joined;
+    if (entry.solver) {
+      const { size } = entry.solver;
+      joined = new Uint8Array(entry.length);
+      entry.solver.solve().forEach((chunk, i) => joined.set(chunk.subarray(0, Math.max(0, Math.min(size, entry.length - i * size))), i * size));
+    } else {
+      let length = 0;
+      for (let i = 0; i < entry.total; i++) length += entry.parts.get(i).length;
+      joined = new Uint8Array(length);
+      let at = 0;
+      for (let i = 0; i < entry.total; i++) {
+        const part = entry.parts.get(i);
+        joined.set(part, at);
+        at += part.length;
+      }
     }
     this.messages.delete(frame.msgId);
     this.completed.set(entry.id, now);
@@ -228,7 +293,7 @@ export class Reassembler {
   pending() {
     return [...this.messages.values()].map((e) => ({
       id: e.id,
-      received: e.parts.size,
+      received: e.solver?.rank ?? e.parts.size,
       total: e.total,
       bytes: [...e.parts.values()].reduce((n, p) => n + p.length, 0),
     }));

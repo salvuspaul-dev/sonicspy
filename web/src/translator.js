@@ -1,16 +1,18 @@
 /*
  * Universal translator: one microphone stream in, every protocol decoded at
- * once — Tonedrop in all four modes, ggwave (and so gibberlink), DTMF, Morse
- * and tap code — out as one readable transcript.
+ * once — Tonedrop in every mode, MFSK and Wave, ggwave (and so gibberlink),
+ * DTMF, Morse and tap code — out as one readable transcript.
  *
  * Events: { channel, mode?, kind: 'text' | 'file' | 'binary' | 'partial',
  * text?, sender?, file?: { name, mime, data }, bytes?, at } where `at` is the
  * position in the stream in seconds. Everything here is untrusted input from
- * whoever is in earshot.
+ * whoever is in earshot. Wave modes also report `info` (the last frame's
+ * SNR, see wave.js) and two Link-only kinds: 'ack', a delivery receipt, and
+ * 'again', a frame of a message already delivered.
  */
 
-import { PROFILES, Demodulator, DEFAULT_SQUELCH, frameSymbols, modulateFrames } from './modem.js';
-import { Reassembler, expectedFrameBytes, FLAG_GZIP, framesForText } from './protocol.js';
+import { MODES, Demodulator, DEFAULT_SQUELCH, frameSeconds, modulateFrames } from './modem.js';
+import { Reassembler, expectedFrameBytes, FLAG_ACK, FLAG_GZIP, framesForText, onAir, parseFrame } from './protocol.js';
 import { parseFileContainer, maybeDecompress } from './transfer.js';
 import { GgwaveDecoder, fromGibberlink, ggEncode, GG_PROTOCOLS } from './ggwave.js';
 import { CODES } from './codes.js';
@@ -18,7 +20,7 @@ import { CODES } from './codes.js';
 /* Everything text can be spoken as: 'tonedrop:<mode>', a ggwave protocol
  * ('gg-fast', …) or a code ('morse', 'dtmf', 'tap'). */
 export const VOICES = [
-  ...Object.keys(PROFILES).map((mode) => ({ id: `tonedrop:${mode}`, label: `Tonedrop ${PROFILES[mode].label}` })),
+  ...Object.keys(MODES).map((mode) => ({ id: `tonedrop:${mode}`, label: `Tonedrop ${MODES[mode].label}` })),
   ...Object.entries(GG_PROTOCOLS).map(([id, spec]) => ({ id, label: spec.label })),
   ...Object.entries(CODES).map(([id, code]) => ({ id, label: code.label })),
 ];
@@ -26,12 +28,10 @@ export const VOICES = [
 export async function speak(text, voice, { fs = 48000 } = {}) {
   if (!text.trim()) throw new Error('nothing to say');
   if (voice.startsWith('tonedrop:')) {
-    const profile = PROFILES[voice.slice('tonedrop:'.length)];
+    const profile = MODES[voice.slice('tonedrop:'.length)];
     if (!profile) throw new Error(`unknown voice ${voice}`);
     const { frames } = framesForText(text, { chunkBytes: profile.chunkBytes });
-    const all = [];
-    for (let r = 0; r < profile.repeats; r++) all.push(...frames);
-    return modulateFrames(all, { fs, profile });
+    return modulateFrames(onAir(frames, profile.repeats, { fountain: profile.phy === 'ofdm' }), { fs, profile });
   }
   if (GG_PROTOCOLS[voice]) return ggEncode(text, { protocol: voice, fs });
   const code = CODES[voice];
@@ -108,30 +108,37 @@ export class Translator {
   }
 
   #addTonedrop(squelch) {
-    for (const mode of Object.keys(PROFILES)) {
-      const profile = PROFILES[mode];
-      const reassembler = new Reassembler({ onComplete: (message) => this.#onTonedrop(mode, message) });
+    for (const mode of Object.keys(MODES)) {
+      const profile = MODES[mode];
+      let info;
+      const reassembler = new Reassembler({ onComplete: (message) => this.#onTonedrop(mode, message, info) });
       this.demods.push(
         new Demodulator({
           fs: this.fs,
           profile,
           squelch,
           expectedFrameBytes,
-          onFrame: (bytes) => {
-            const seconds = frameSymbols(profile, bytes.length) * profile.symbolSeconds;
-            this.#busy(this.at - seconds - 0.1, this.at + 0.1);
+          onFrame: (bytes, frameInfo) => {
+            this.#busy(this.at - frameSeconds(profile, bytes.length) - 0.1, this.at + 0.1);
             this.#quietRhythm(this.at + 0.1);
-            reassembler.accept(bytes);
+            info = frameInfo && { ...frameInfo, seconds: frameSeconds(profile, bytes.length) };
+            if (reassembler.accept(bytes) !== 'duplicate' || !info) return;
+            const { msgId } = parseFrame(bytes);
+            if (reassembler.completed.has(msgId)) this.onEvent({ channel: 'tonedrop', mode, kind: 'again', id: msgId, info, at: this.at });
           },
         }),
       );
     }
   }
 
-  async #onTonedrop(mode, message) {
+  async #onTonedrop(mode, message, info) {
     const at = this.at;
+    if (message.flags & FLAG_ACK) {
+      this.onEvent({ channel: 'tonedrop', mode, kind: 'ack', bytes: message.binary, id: message.id, at });
+      return;
+    }
     if (message.text !== null) {
-      this.onEvent({ channel: 'tonedrop', mode, kind: 'text', text: message.text, id: message.id, at });
+      this.onEvent({ channel: 'tonedrop', mode, kind: 'text', text: message.text, id: message.id, info, at });
       return;
     }
     const container = parseFileContainer(message.binary);
@@ -142,7 +149,7 @@ export class Translator {
     try {
       const data = await maybeDecompress(container.data, (message.flags & FLAG_GZIP) !== 0);
       const file = { name: container.name, mime: container.mime, data };
-      this.onEvent({ channel: 'tonedrop', mode, kind: 'file', file, id: message.id, at });
+      this.onEvent({ channel: 'tonedrop', mode, kind: 'file', file, id: message.id, info, at });
     } catch {
       this.onEvent({ channel: 'tonedrop', mode, kind: 'binary', bytes: message.binary, id: message.id, at });
     }

@@ -8,14 +8,14 @@
  */
 
 import {
-  PROFILES,
+  MODES,
   modulateFrames,
   Demodulator,
   demodulateAll,
   toneFreq,
   toneCount,
   dataTone,
-  frameSymbols,
+  frameSeconds,
   bitsPerSymbol,
 } from './modem.js';
 import {
@@ -26,7 +26,10 @@ import {
   fromHex,
   FLAG_BINARY,
   FLAG_GZIP,
+  onAir,
+  repairFrames,
 } from './protocol.js';
+import { layout, MODCODS, WAVE_FS } from './wave.js';
 import {
   packFileContainer,
   parseFileContainer,
@@ -45,7 +48,7 @@ const audio = new SonicAudio();
 const $ = (id) => document.getElementById(id);
 
 const state = {
-  profile: 'robust',
+  profile: 'wave',
   listening: false,
   demod: null,
   reassembler: null,
@@ -61,7 +64,7 @@ function setStatus(el, text, kind = '') {
 }
 
 function profile() {
-  return PROFILES[state.profile];
+  return MODES[state.profile];
 }
 
 function safeFileName(name) {
@@ -113,14 +116,20 @@ for (const tab of document.querySelectorAll('[data-sendmode]')) {
 
 function renderProfileInfo() {
   const p = profile();
-  const bps = bitsPerSymbol(p);
-  const rate = payloadBytesPerSecond(p);
-  const highest = toneFreq(p, toneCount(p) - 1);
-  const sets = p.sets === 1 ? '1 tone set' : `${p.sets} rotating tone sets`;
-  $('profile-rate').textContent = `${rate.toFixed(0)} bytes/s`;
-  $('profile-detail').textContent =
-    `${bps} bits/symbol · ${sets} · ${(1 / p.symbolSeconds).toFixed(0)} symbols/s · ` +
-    `${toneFreq(p, 0).toFixed(0)}–${highest.toFixed(0)} Hz`;
+  $('profile-rate').textContent = `${payloadBytesPerSecond(p).toFixed(0)} bytes/s`;
+  if (p.phy === 'ofdm') {
+    const L = layout(p);
+    $('profile-detail').textContent =
+      `OFDM · ${L.data.length} data + ${L.pilots.length} pilot carriers · ${MODCODS[p.modcod].label}, ` +
+      `up to ${MODCODS.at(-1).label} on a Link · ${p.fLow}–${p.fHigh} Hz`;
+  } else {
+    const sets = p.sets === 1 ? '1 tone set' : `${p.sets} rotating tone sets`;
+    $('profile-detail').textContent =
+      `${bitsPerSymbol(p)} bits/symbol · ${sets} · ${(1 / p.symbolSeconds).toFixed(0)} symbols/s · ` +
+      `${toneFreq(p, 0).toFixed(0)}–${toneFreq(p, toneCount(p) - 1).toFixed(0)} Hz`;
+  }
+  $('how-wave').hidden = p.phy !== 'ofdm';
+  $('how-mfsk').hidden = p.phy === 'ofdm';
   renderToneTable();
 }
 
@@ -134,6 +143,20 @@ function renderToneTable() {
   const p = profile();
   const body = $('tone-table').querySelector('tbody');
   body.replaceChildren();
+  if (p.phy === 'ofdm') {
+    const L = layout(p);
+    const band = `${L.bins.length} carriers ${(WAVE_FS / p.fftSize).toFixed(1)} Hz apart, ${p.fLow}–${p.fHigh} Hz`;
+    MODCODS.forEach((m, i) => {
+      const row = document.createElement('tr');
+      for (const text of [`rate ${i}`, `${m.label}: ${m.bits} bit${m.bits > 1 ? 's' : ''} per carrier`, band]) {
+        const cell = document.createElement('td');
+        cell.textContent = text;
+        row.append(cell);
+      }
+      body.append(row);
+    });
+    return;
+  }
   for (let i = 0; i < p.m; i++) {
     const row = document.createElement('tr');
     const sym = document.createElement('td');
@@ -195,8 +218,7 @@ async function buildFrames() {
 }
 
 function describeCost({ frames, repeats, label }) {
-  const symbols = frames.reduce((n, f) => n + frameSymbols(profile(), f.length), 0) * repeats;
-  const seconds = symbols * profile().symbolSeconds;
+  const seconds = frames.reduce((n, f) => n + frameSeconds(profile(), f.length), 0) * repeats;
   $('send-eta').textContent = `${label} → ${frames.length} frame${frames.length === 1 ? '' : 's'} × ${repeats} repeat${repeats === 1 ? '' : 's'} ≈ ${formatDuration(seconds)} on air`;
   return seconds;
 }
@@ -240,8 +262,8 @@ $('btn-broadcast').addEventListener('click', async () => {
     state.carrier = true;
     $('btn-broadcast').textContent = 'Stop broadcast loop';
     setStatus($('send-status'), 'Broadcasting on repeat — a listener joining late still gets the whole message.', 'ok');
-    while (state.carrier) {
-      await transmitOnce(pendingSend);
+    for (let pass = 0; state.carrier; pass++) {
+      await transmitOnce(pendingSend, pass);
       if (!state.carrier) break;
       await sleep(700);
     }
@@ -257,13 +279,16 @@ function stopCarrier() {
   audio.duck(false);
 }
 
-async function transmitOnce({ frames, repeats }) {
+async function transmitOnce({ frames, repeats }, pass = 0) {
   await audio.context();
   const fs = audio.sampleRate;
-  const repeatFrames = [];
-  for (let r = 0; r < repeats; r++) repeatFrames.push(...frames);
+  /* Wave repeats are fountain repair frames, and so is every later broadcast
+   * pass: a listener who joined late needs any K frames, not the ones it missed. */
+  const wave = profile().phy === 'ofdm';
+  const n = frames.length * repeats;
+  const all = wave && pass > 0 ? repairFrames(frames, n, pass * n) : onAir(frames, repeats, { fountain: wave });
 
-  const samples = modulateFrames(repeatFrames, { fs, profile: profile() });
+  const samples = modulateFrames(all, { fs, profile: profile() });
   setStatus($('send-status'), `On air: ${samples.length} samples at ${fs} Hz…`, '');
   /* Dipping the song would announce a stealth transmission to every listener. */
   const wantsDuck = $('duck').checked && audio.musicSource && state.profile !== 'stealth';
@@ -319,7 +344,9 @@ $('btn-listen').addEventListener('click', async () => {
     state.listening = true;
     $('btn-listen').textContent = 'Stop listening';
     setStatus($('listen-status'), `Listening at ${fs} Hz — every frame passing CRC is shown below.`, 'ok');
-    $('device-info').textContent = `capture ${fs} Hz · ${toneCount(profile())} tones · squelch ${$('squelch').value}`;
+    const p = profile();
+    const carriers = p.phy === 'ofdm' ? `${layout(p).bins.length} OFDM carriers` : `${toneCount(p)} tones`;
+    $('device-info').textContent = `capture ${fs} Hz · ${carriers} · squelch ${$('squelch').value}`;
   } catch (err) {
     setStatus($('listen-status'), `Microphone unavailable: ${err.message}`, 'error');
   }
@@ -438,15 +465,17 @@ function drawSpectrum() {
   ctx2d.fillRect(0, 0, width, height);
 
   const p = profile();
-  const minHz = 300;
-  const maxHz = toneFreq(p, toneCount(p) - 1) + 500;
+  const wave = p.phy === 'ofdm';
+  const minHz = wave ? p.fLow - 500 : 300;
+  const maxHz = wave ? p.fHigh + 500 : toneFreq(p, toneCount(p) - 1) + 500;
   const xFor = (hz) => ((hz - minHz) / (maxHz - minHz)) * width;
 
-  /* Tone grid for the active profile. */
+  /* Tone grid for the active profile; band edges for Wave. */
+  const grid = wave ? [p.fLow, p.fHigh] : Array.from({ length: toneCount(p) }, (_, i) => toneFreq(p, i));
   ctx2d.strokeStyle = 'rgba(120, 200, 255, 0.22)';
   ctx2d.lineWidth = 1;
-  for (let i = 0; i < toneCount(p); i++) {
-    const x = xFor(toneFreq(p, i));
+  for (const hz of grid) {
+    const x = xFor(hz);
     if (x < 0 || x > width) continue;
     ctx2d.beginPath();
     ctx2d.moveTo(x, 0);

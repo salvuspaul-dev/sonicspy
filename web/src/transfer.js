@@ -8,7 +8,7 @@
  */
 
 import { FLAG_BINARY, FLAG_GZIP } from './protocol.js';
-import { frameSymbols, PREFIX_BYTES, CRC_BYTES } from './modem.js';
+import { frameSeconds, PREFIX_BYTES, CRC_BYTES } from './modem.js';
 
 const MAGIC = [0x53, 0x50, 0x46, 0x31]; // "SPF1"
 
@@ -146,7 +146,7 @@ export async function maybeDecompress(bytes, gzipped, { maxBytes = 64 * 1024 * 1
  * the gap before the next frame. */
 export function payloadBytesPerSecond(profile) {
   const frameBytes = PREFIX_BYTES + profile.chunkBytes + CRC_BYTES;
-  const secondsPerFrame = frameSymbols(profile, frameBytes) * profile.symbolSeconds;
+  const secondsPerFrame = frameSeconds(profile, frameBytes);
   return profile.chunkBytes / (secondsPerFrame * (profile.repeats || 1));
 }
 
