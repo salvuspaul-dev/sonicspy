@@ -204,7 +204,7 @@ await page.click('.tab[data-panel="translate"]');
 /* Morse is opt-in, as it keys on room noise. */
 await page.check('#translate-channels input[value="morse"]');
 const mixed = [
-  await speak('agent alpha: meet at dock 7', 'sonicspy:fast', { fs: 48000 }),
+  await speak('agent alpha: meet at dock 7', 'tonedrop:fast', { fs: 48000 }),
   await speak(toGibberlink('is it better now?', 'K9'), 'gg-fast', { fs: 48000 }),
   await speak('*123#', 'dtmf', { fs: 48000 }),
   await speak('SOS', 'morse', { fs: 48000 }),
@@ -222,7 +222,7 @@ const transcript = (await page.locator('#translate-log .chat-line').allInnerText
 check('a recording of four protocols is translated in the page', /4 messages found/.test(translated), translated);
 check(
   'each protocol is named and decoded exactly',
-  JSON.stringify(transcript) === JSON.stringify(['SonicSpy fast agent alpha: meet at dock 7', 'ggwave / gibberlink from K9 is it better now?', 'DTMF *123#', 'Morse SOS']),
+  JSON.stringify(transcript) === JSON.stringify(['Tonedrop fast agent alpha: meet at dock 7', 'ggwave / gibberlink from K9 is it better now?', 'DTMF *123#', 'Morse SOS']),
   JSON.stringify(transcript),
 );
 await page.fill('#translate-text', 'ABCDE');
@@ -235,9 +235,9 @@ await page.selectOption('#translate-as', 'dtmf');
 await page.click('#btn-translate-wav');
 check('text DTMF cannot carry at all is refused', /cannot carry/.test(await waitForText(page, 'translate-say-status', /cannot|Saved/)));
 await page.fill('#translate-text', 'hello agents');
-await page.selectOption('#translate-as', 'sonicspy:turbo');
+await page.selectOption('#translate-as', 'tonedrop:turbo');
 const [wavDownload] = await Promise.all([page.waitForEvent('download'), page.click('#btn-translate-wav')]);
-check('any voice can be saved as a WAV', /sonicspy-sonicspy-turbo\.wav/.test(wavDownload.suggestedFilename()), wavDownload.suggestedFilename());
+check('any voice can be saved as a WAV', /tonedrop-tonedrop-turbo\.wav/.test(wavDownload.suggestedFilename()), wavDownload.suggestedFilename());
 
 /* --- link: controls render and refuse what they cannot do yet -------------- */
 await page.click('.tab[data-panel="link"]');

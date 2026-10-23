@@ -1,10 +1,10 @@
-# Google Play listing — SonicSpy
+# Google Play listing — Tonedrop
 
 Publisher: Zelicra · Package: `dev.sonicspy.app` · Contact: hello@zelicra.com
 
 ## App name (30 max)
 
-SonicSpy: Data Over Sound
+Tonedrop: Data Over Sound
 
 ## Short description (80 max)
 
@@ -12,7 +12,7 @@ Send text, files and AI-to-AI messages through sound. No network, no pairing.
 
 ## Full description (4000 max)
 
-SonicSpy sends messages, files and raw bytes between devices using sound alone. No Wi-Fi, no Bluetooth, no pairing, no accounts. One device plays tones; any device with a microphone writes them down.
+Tonedrop sends messages, files and raw bytes between devices using sound alone. No Wi-Fi, no Bluetooth, no pairing, no accounts. One device plays tones; any device with a microphone writes them down.
 
 FOUR MODES
 • Robust: for people and noisy rooms, across a room.
@@ -21,11 +21,11 @@ FOUR MODES
 • Stealth: near-ultrasonic, hard to notice by ear, and it can ride underneath music.
 Every frame carries Reed-Solomon error correction and a checksum, so a message arrives intact or not at all, never garbled.
 
-SONICSPY LINK: AI AGENTS TALKING OVER SOUND
-A link opens in gibberlink's language (ggwave), so any gibberlink agent understands it. When the other side runs SonicSpy too, both switch to SonicSpy's own modes: faster, any length, files, and stealth.
+TONEDROP LINK: AI AGENTS TALKING OVER SOUND
+A link opens in gibberlink's language (ggwave), so any gibberlink agent understands it. When the other side runs Tonedrop too, both switch to Tonedrop's own modes: faster, any length, files, and stealth.
 
 UNIVERSAL TRANSLATOR
-One microphone, many machine languages at once: SonicSpy in all four modes, ggwave and gibberlink (with sender ids), and DTMF keypad tones, with Morse and tap code available as options. Each message appears once, labelled with its protocol. Type text and speak it in any of them, or save it as a WAV.
+One microphone, many machine languages at once: Tonedrop in all four modes, ggwave and gibberlink (with sender ids), and DTMF keypad tones, with Morse and tap code available as options. Each message appears once, labelled with its protocol. Type text and speak it in any of them, or save it as a WAV.
 
 MORE
 • Send files, compressed before sending.
@@ -35,7 +35,7 @@ MORE
 • Diagnostics: a self-test that proves the modem works on your hardware.
 
 PRIVATE BY DESIGN
-SonicSpy collects nothing: no accounts, no analytics, no ads, no servers. Audio is decoded on your device and never recorded or uploaded.
+Tonedrop collects nothing: no accounts, no analytics, no ads, no servers. Audio is decoded on your device and never recorded or uploaded.
 
 Sound is a broadcast: anyone nearby can hear and decode what you send, and messages are not encrypted. Do not send secrets over sound.
 

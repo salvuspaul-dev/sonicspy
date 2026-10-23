@@ -37,7 +37,7 @@ test('encoder matches the QR-code "hello world" reference parity', () => {
 });
 
 test('a clean codeword decodes to its message', () => {
-  const msg = new TextEncoder().encode('sonicspy');
+  const msg = new TextEncoder().encode('tonedrop');
   assert.deepEqual([...rsDecode(rsEncode(msg, 8), 8)], [...msg]);
 });
 

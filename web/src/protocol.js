@@ -1,5 +1,5 @@
 /*
- * sonicspy protocol — framing, chunking and reassembly.
+ * tonedrop protocol — framing, chunking and reassembly.
  *
  * Pure data-layer code. It knows nothing about audio; it turns messages into
  * frames that the modem can transmit and turns received frames back into

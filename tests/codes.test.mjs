@@ -83,7 +83,7 @@ test('Morse accepts the dots and dashes people paste, and flags junk as ?', () =
 });
 
 test('Morse audio decodes back to the text at the default speed', () => {
-  const text = 'CQ CQ DE SONICSPY 73';
+  const text = 'CQ CQ DE TONEDROP 73';
   assert.equal(decodeMorse(morseSamples(text, { fs: FS }), { fs: FS }), text);
 });
 

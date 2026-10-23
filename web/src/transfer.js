@@ -1,5 +1,5 @@
 /*
- * sonicspy transfer — container for sending files and raw data by sound.
+ * tonedrop transfer — container for sending files and raw data by sound.
  *
  * A file becomes one message: a small container holding the name, the media
  * type and the bytes. Compression is applied before framing when the platform

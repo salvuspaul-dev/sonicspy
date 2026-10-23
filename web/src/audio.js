@@ -1,5 +1,5 @@
 /*
- * sonicspy audio — the browser's ears and voice.
+ * tonedrop audio — the browser's ears and voice.
  *
  * This is the only layer that touches Web Audio. It plays modulated samples,
  * optionally mixes them under music, and streams microphone samples into the

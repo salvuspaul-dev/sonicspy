@@ -1,17 +1,17 @@
 #!/usr/bin/env node
 /*
- * sonicspy CLI — the link for programs.
+ * tonedrop CLI — the link for programs.
  *
  * A process has no microphone and no speaker, so the CLI works in files: it
  * encodes a message or a file into a WAV, and decodes a WAV back into messages
  * and files. That is enough for one agent to hand data to another agent, or to
  * a person who plays the WAV out loud.
  *
- *   sonicspy-cli.mjs encode --text "hello" --out hello.wav
- *   sonicspy-cli.mjs encode --file ./report.json --out report.wav --profile turbo
- *   sonicspy-cli.mjs decode --in recording.wav --out-dir ./received
- *   sonicspy-cli.mjs selftest --profile fast
- *   sonicspy-cli.mjs profiles
+ *   tonedrop-cli.mjs encode --text "hello" --out hello.wav
+ *   tonedrop-cli.mjs encode --file ./report.json --out report.wav --profile turbo
+ *   tonedrop-cli.mjs decode --in recording.wav --out-dir ./received
+ *   tonedrop-cli.mjs selftest --profile fast
+ *   tonedrop-cli.mjs profiles
  */
 
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
@@ -88,7 +88,7 @@ async function encode(args) {
   const profile = resolveProfile(args.profile);
   const repeats = Math.max(1, Math.min(20, Number(args.repeats || profile.repeats)));
   const fs = Number(args.fs || FS);
-  const out = args.out || 'sonicspy.wav';
+  const out = args.out || 'tonedrop.wav';
   const chunkBytes = profile.chunkBytes;
 
   let frames;
@@ -247,7 +247,7 @@ async function code(args) {
 
 function selftest(args) {
   const profile = resolveProfile(args.profile);
-  const text = args.text ? String(args.text) : 'sonicspy link check';
+  const text = args.text ? String(args.text) : 'tonedrop link check';
   const started = Date.now();
 
   const { frames } = framesForText(text, { chunkBytes: profile.chunkBytes });
@@ -292,13 +292,13 @@ function selftest(args) {
   if (results.some((r) => !r)) process.exitCode = 1;
 }
 
-/* Text in any voice: SonicSpy, ggwave/gibberlink or a code. */
+/* Text in any voice: Tonedrop, ggwave/gibberlink or a code. */
 async function say(args) {
-  const voice = args.as || 'sonicspy:fast';
+  const voice = args.as || 'tonedrop:fast';
   if (typeof args.text !== 'string') throw new Error(`say needs --text "..." and --as one of: ${VOICES.map((v) => v.id).join(', ')}`);
   const text = args.from ? toGibberlink(args.text, String(args.from)) : args.text;
   const samples = await speak(text, voice, { fs: FS });
-  const out = args.out || `sonicspy-${voice.replace(':', '-')}.wav`;
+  const out = args.out || `tonedrop-${voice.replace(':', '-')}.wav`;
   await writeFile(out, toWav(samples, FS));
   console.log(`wrote     ${out} (${formatDuration(samples.length / FS)} of ${voice})`);
 }
@@ -368,7 +368,7 @@ async function main() {
     default:
       console.log(
         [
-          'sonicspy — data over sound',
+          'tonedrop — data over sound',
           '',
           'usage:',
           '  encode --text "hello" --out hello.wav [--profile robust|fast|turbo|stealth] [--repeats 2]',
@@ -379,8 +379,8 @@ async function main() {
           '  code --type morse|tap|dtmf --text "sos" [--out sos.wav] [--wpm 18] [--freq 700] [--period 0.25]',
           '  code --type morse --code "... --- ..."',
           '  code --type morse --in recording.wav',
-          '  say --text "is it better now?" --as gg-fast [--from AB] [--out msg.wav]   (any voice: sonicspy:turbo, gg-fast, morse, dtmf…)',
-          '  translate --in recording.wav [--channels sonicspy,ggwave,dtmf,morse,tap] [--json]',
+          '  say --text "is it better now?" --as gg-fast [--from AB] [--out msg.wav]   (any voice: tonedrop:turbo, gg-fast, morse, dtmf…)',
+          '  translate --in recording.wav [--channels tonedrop,ggwave,dtmf,morse,tap] [--json]',
           '  profiles',
         ].join('\n')
       );

@@ -1,5 +1,5 @@
 /*
- * sonicspy app — UI wiring.
+ * tonedrop app — UI wiring.
  *
  * Everything received over the air is untrusted input from an unknown device,
  * so decoded content is only ever inserted as text nodes, never as markup, and
@@ -273,7 +273,7 @@ async function transmitOnce({ frames, repeats }) {
   $('send-wav').disabled = false;
   $('send-wav').onclick = () => {
     const wav = toWav(samples, fs);
-    download(wav, `sonicspy-${state.profile}.wav`, 'audio/wav');
+    download(wav, `tonedrop-${state.profile}.wav`, 'audio/wav');
   };
 }
 
@@ -409,7 +409,7 @@ async function onMessage(message) {
 
     const raw = document.createElement('button');
     raw.textContent = 'Download raw bytes';
-    raw.addEventListener('click', () => download(message.binary, `sonicspy-${message.id.toString(16)}.bin`, 'application/octet-stream'));
+    raw.addEventListener('click', () => download(message.binary, `tonedrop-${message.id.toString(16)}.bin`, 'application/octet-stream'));
     actions.append(raw);
     card.append(actions);
 
@@ -592,7 +592,7 @@ $('btn-code-stop').addEventListener('click', () => {
 $('btn-code-wav').addEventListener('click', async () => {
   try {
     const { fs, samples } = await codeAudio();
-    download(toWav(samples, fs), `sonicspy-${codeState.kind}.wav`, 'audio/wav');
+    download(toWav(samples, fs), `tonedrop-${codeState.kind}.wav`, 'audio/wav');
     setStatus($('code-status'), 'Saved.', 'ok');
   } catch (err) {
     setStatus($('code-status'), err.message, 'error');
@@ -663,7 +663,7 @@ selectCode('morse');
 
 $('btn-selftest').addEventListener('click', () => {
   const fs = 48000;
-  const text = $('selftest-text').value || 'sonicspy self test';
+  const text = $('selftest-text').value || 'tonedrop self test';
   const profile0 = profile();
   const t0 = performance.now();
 

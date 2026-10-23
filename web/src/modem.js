@@ -1,5 +1,5 @@
 /*
- * sonicspy modem — pure DSP core.
+ * tonedrop modem — pure DSP core.
  *
  * No Web Audio, no DOM: this module runs unchanged in Node and in the browser,
  * which is what makes the modem testable without a microphone.
@@ -573,7 +573,7 @@ export class Demodulator {
       this.onFrame(bytes);
     } catch (err) {
       this.frameErrors++;
-      if (typeof console !== 'undefined') console.warn('sonicspy: dropping frame, handler threw', err);
+      if (typeof console !== 'undefined') console.warn('tonedrop: dropping frame, handler threw', err);
     }
     return true;
   }

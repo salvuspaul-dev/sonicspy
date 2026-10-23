@@ -1,5 +1,5 @@
 /*
- * SonicSpy Link end to end. "The air" plays every clip to every party —
+ * Tonedrop Link end to end. "The air" plays every clip to every party —
  * including the one that sent it, as a real room does — through the real
  * translator, so these tests cover modulation, decoding, the handshake and
  * the upgrade together.
@@ -45,7 +45,7 @@ class Air {
     });
     p.translator = await Translator.create({
       fs: FS,
-      channels: ['sonicspy', 'ggwave'],
+      channels: ['tonedrop', 'ggwave'],
       onEvent: (e) => p.heard.push(e),
     });
     this.parties.push(p);
@@ -100,7 +100,7 @@ const messages = (p) => p.events.filter((e) => e.type === 'message' || e.type ==
  * when a reply is lost, and a busy test machine can be slow to hear one. */
 const PATIENT = { timeoutMs: 30000 };
 
-onAir('two SonicSpy agents open in gibberlink and upgrade to the first mode both speak', {}, async (air) => {
+onAir('two Tonedrop agents open in gibberlink and upgrade to the first mode both speak', {}, async (air) => {
   const a = await air.party();
   const b = await air.party({ modes: ['fast', 'robust'] });
   assert.equal(await a.link.connect(PATIENT), 'linked');
@@ -166,7 +166,7 @@ onAir('a gibberlink agent is understood and answered in gibberlink', {}, async (
   for (const clip of air.played) plain.push(pad(clip));
   plain.close();
   assert.deepEqual(heard, [`${a.link.id}$Shall we switch to gibberlink mode?`]);
-  await assert.rejects(a.link.sendFile({ name: 'x', mime: '', data: new Uint8Array(4) }), /SonicSpy peer/);
+  await assert.rejects(a.link.sendFile({ name: 'x', mime: '', data: new Uint8Array(4) }), /Tonedrop peer/);
 });
 
 test('text longer than one ggwave message is split for gibberlink on word boundaries', () => {

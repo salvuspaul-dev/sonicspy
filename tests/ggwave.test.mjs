@@ -1,6 +1,6 @@
 /*
  * ggwave compatibility. ggwave is the modem gibberlink speaks; these tests run
- * the vendored build both ways so anything SonicSpy sends, a ggwave or
+ * the vendored build both ways so anything Tonedrop sends, a ggwave or
  * gibberlink receiver hears, and the other way round.
  */
 

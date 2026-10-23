@@ -1,6 +1,6 @@
 {
   "appId": "dev.sonicspy.app",
-  "appName": "SonicSpy",
+  "appName": "Tonedrop",
   "webDir": "web",
   "bundledWebRuntime": false,
   "server": {

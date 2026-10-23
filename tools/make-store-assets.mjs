@@ -69,7 +69,7 @@ await render(join(root, 'store/feature-graphic.png'), 1024, 500, `
     background:radial-gradient(circle at 20% 50%,#10203a,${BG} 60%);font-family:'Segoe UI',Roboto,sans-serif">
     ${markAt(300, 1)}
     <div>
-      <div style="color:#e6edf7;font-size:92px;font-weight:700;letter-spacing:-2px">SonicSpy</div>
+      <div style="color:#e6edf7;font-size:92px;font-weight:700;letter-spacing:-2px">Tonedrop</div>
       <div style="color:#4ade80;font-size:36px;font-weight:600;margin-top:4px">Data over sound</div>
       <div style="color:#93a3bd;font-size:25px;margin-top:14px;max-width:560px">Text, files and AI-to-AI links through any speaker and microphone.</div>
     </div>

@@ -121,13 +121,13 @@ test('symbol packing round-trips at every bits-per-symbol in use', () => {
 
 for (const [name, profile] of Object.entries(PROFILES)) {
   test(`[${name}] clean channel round-trips a frame`, () => {
-    const { frame, payload } = makeTestFrame('sonicspy over sound');
+    const { frame, payload } = makeTestFrame('tonedrop over sound');
     const audio = modulateFrames([frame], { fs: FS, profile });
     const { frames, stats } = decodeOnce(audio, profile, 0.1);
     assert.equal(stats.crcFailures, 0, 'no frame should fail CRC');
     assert.equal(frames.length, 1, 'exactly one frame decoded');
     assert.deepEqual([...frames[0]], [...frame]);
-    assert.equal(new TextDecoder().decode(frames[0].slice(17, 17 + payload.length)), 'sonicspy over sound');
+    assert.equal(new TextDecoder().decode(frames[0].slice(17, 17 + payload.length)), 'tonedrop over sound');
   });
 
   test(`[${name}] survives Gaussian noise at 10 dB SNR`, () => {

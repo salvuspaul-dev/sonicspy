@@ -50,14 +50,14 @@ async function mixedBroadcast() {
 }
 
 test('a mixed broadcast becomes one transcript, each message once and correctly labelled', async () => {
-  const events = await transcribe(await mixedBroadcast(), ['sonicspy', 'ggwave', 'dtmf', 'morse']);
+  const events = await transcribe(await mixedBroadcast(), ['tonedrop', 'ggwave', 'dtmf', 'morse']);
   const summary = events.map((e) => `${e.channel}${e.mode ? `/${e.mode}` : ''}:${e.kind}:${e.text ?? e.file?.name}`);
   assert.deepEqual(summary, [
-    'sonicspy/fast:text:agent alpha: meet at dock 7',
+    'tonedrop/fast:text:agent alpha: meet at dock 7',
     'ggwave:text:is it better now?',
     'dtmf:text:*123#',
     'morse:text:SOS',
-    'sonicspy/turbo:file:plan.json',
+    'tonedrop/turbo:file:plan.json',
   ]);
   assert.equal(events[1].sender, 'K9');
   assert.equal(new TextDecoder().decode(events[4].file.data), '{"go":true}');
@@ -69,7 +69,7 @@ test('with every channel on, tap code adds nothing to the same broadcast, and de
   const started = performance.now();
   const events = await transcribe(audio, Object.keys(CHANNELS));
   const elapsed = (performance.now() - started) / 1000;
-  assert.deepEqual(events.map((e) => e.channel), ['sonicspy', 'ggwave', 'dtmf', 'morse', 'sonicspy']);
+  assert.deepEqual(events.map((e) => e.channel), ['tonedrop', 'ggwave', 'dtmf', 'morse', 'tonedrop']);
   const seconds = audio.length / FS;
   assert.ok(elapsed < seconds / 3, `${elapsed.toFixed(2)} s to translate ${seconds.toFixed(1)} s`);
 });

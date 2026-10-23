@@ -1,5 +1,5 @@
 /*
- * sonicspy codes — classic signalling codes, by ear and by machine.
+ * tonedrop codes — classic signalling codes, by ear and by machine.
  *
  * Morse (keyed tones), tap code (knocks on the 5x5 Polybius square) and DTMF
  * (telephone keypad tones). Each code has the same faces: text <-> written

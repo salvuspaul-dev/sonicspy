@@ -1,6 +1,6 @@
 /*
  * Universal translator: one microphone stream in, every protocol decoded at
- * once — SonicSpy in all four modes, ggwave (and so gibberlink), DTMF, Morse
+ * once — Tonedrop in all four modes, ggwave (and so gibberlink), DTMF, Morse
  * and tap code — out as one readable transcript.
  *
  * Events: { channel, mode?, kind: 'text' | 'file' | 'binary' | 'partial',
@@ -15,18 +15,18 @@ import { parseFileContainer, maybeDecompress } from './transfer.js';
 import { GgwaveDecoder, fromGibberlink, ggEncode, GG_PROTOCOLS } from './ggwave.js';
 import { CODES } from './codes.js';
 
-/* Everything text can be spoken as: 'sonicspy:<mode>', a ggwave protocol
+/* Everything text can be spoken as: 'tonedrop:<mode>', a ggwave protocol
  * ('gg-fast', …) or a code ('morse', 'dtmf', 'tap'). */
 export const VOICES = [
-  ...Object.keys(PROFILES).map((mode) => ({ id: `sonicspy:${mode}`, label: `SonicSpy ${PROFILES[mode].label}` })),
+  ...Object.keys(PROFILES).map((mode) => ({ id: `tonedrop:${mode}`, label: `Tonedrop ${PROFILES[mode].label}` })),
   ...Object.entries(GG_PROTOCOLS).map(([id, spec]) => ({ id, label: spec.label })),
   ...Object.entries(CODES).map(([id, code]) => ({ id, label: code.label })),
 ];
 
 export async function speak(text, voice, { fs = 48000 } = {}) {
   if (!text.trim()) throw new Error('nothing to say');
-  if (voice.startsWith('sonicspy:')) {
-    const profile = PROFILES[voice.slice('sonicspy:'.length)];
+  if (voice.startsWith('tonedrop:')) {
+    const profile = PROFILES[voice.slice('tonedrop:'.length)];
     if (!profile) throw new Error(`unknown voice ${voice}`);
     const { frames } = framesForText(text, { chunkBytes: profile.chunkBytes });
     const all = [];
@@ -41,7 +41,7 @@ export async function speak(text, voice, { fs = 48000 } = {}) {
 }
 
 export const CHANNELS = {
-  sonicspy: 'SonicSpy',
+  tonedrop: 'Tonedrop',
   ggwave: 'ggwave / gibberlink',
   dtmf: 'DTMF',
   morse: 'Morse',
@@ -49,7 +49,7 @@ export const CHANNELS = {
 };
 
 /* Morse and tap code key on room noise (a fan, a hum), so they are opt-in. */
-export const DEFAULT_CHANNELS = ['sonicspy', 'ggwave', 'dtmf'];
+export const DEFAULT_CHANNELS = ['tonedrop', 'ggwave', 'dtmf'];
 
 /* Rhythm codes have no end marker; this much quiet closes an utterance. */
 const UTTERANCE_GAP_SECONDS = 3;
@@ -57,7 +57,7 @@ const UTTERANCE_GAP_SECONDS = 3;
 export class Translator {
   static async create({ fs, onEvent, channels = DEFAULT_CHANNELS, squelch = DEFAULT_SQUELCH }) {
     const t = new Translator({ fs, onEvent });
-    if (channels.includes('sonicspy')) t.#addSonicSpy(squelch);
+    if (channels.includes('tonedrop')) t.#addTonedrop(squelch);
     if (channels.includes('ggwave')) {
       t.ggwave = await GgwaveDecoder.create({ fs, onMessage: (bytes) => t.#onGgwave(bytes) });
     }
@@ -107,10 +107,10 @@ export class Translator {
     this.ggwave = null;
   }
 
-  #addSonicSpy(squelch) {
+  #addTonedrop(squelch) {
     for (const mode of Object.keys(PROFILES)) {
       const profile = PROFILES[mode];
-      const reassembler = new Reassembler({ onComplete: (message) => this.#onSonicSpy(mode, message) });
+      const reassembler = new Reassembler({ onComplete: (message) => this.#onTonedrop(mode, message) });
       this.demods.push(
         new Demodulator({
           fs: this.fs,
@@ -128,23 +128,23 @@ export class Translator {
     }
   }
 
-  async #onSonicSpy(mode, message) {
+  async #onTonedrop(mode, message) {
     const at = this.at;
     if (message.text !== null) {
-      this.onEvent({ channel: 'sonicspy', mode, kind: 'text', text: message.text, id: message.id, at });
+      this.onEvent({ channel: 'tonedrop', mode, kind: 'text', text: message.text, id: message.id, at });
       return;
     }
     const container = parseFileContainer(message.binary);
     if (!container) {
-      this.onEvent({ channel: 'sonicspy', mode, kind: 'binary', bytes: message.binary, id: message.id, at });
+      this.onEvent({ channel: 'tonedrop', mode, kind: 'binary', bytes: message.binary, id: message.id, at });
       return;
     }
     try {
       const data = await maybeDecompress(container.data, (message.flags & FLAG_GZIP) !== 0);
       const file = { name: container.name, mime: container.mime, data };
-      this.onEvent({ channel: 'sonicspy', mode, kind: 'file', file, id: message.id, at });
+      this.onEvent({ channel: 'tonedrop', mode, kind: 'file', file, id: message.id, at });
     } catch {
-      this.onEvent({ channel: 'sonicspy', mode, kind: 'binary', bytes: message.binary, id: message.id, at });
+      this.onEvent({ channel: 'tonedrop', mode, kind: 'binary', bytes: message.binary, id: message.id, at });
     }
   }
 

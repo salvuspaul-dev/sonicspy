@@ -38,7 +38,7 @@ test('unusual file names survive the container', () => {
 });
 
 test('compression shrinks repetitive data and restores it exactly', async () => {
-  const source = new TextEncoder().encode('sonicspy data over sound. '.repeat(200));
+  const source = new TextEncoder().encode('tonedrop data over sound. '.repeat(200));
   const { data, gzipped } = await maybeCompress(source, true);
   assert.equal(gzipped, true, 'repetitive data should compress');
   assert.ok(data.length < source.length, 'compressed payload must be smaller');

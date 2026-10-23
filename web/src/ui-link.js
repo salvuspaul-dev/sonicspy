@@ -80,7 +80,7 @@ export function initLinkUi({ audio, download, stopOthers }) {
   function describe(link) {
     if (link.state === 'linked') {
       const rate = payloadBytesPerSecond(PROFILES[link.peer.mode]).toFixed(0);
-      return [`Linked with ${link.peer.id} over SonicSpy ${link.peer.mode} — about ${rate} bytes/s, any length, files allowed.`, 'ok'];
+      return [`Linked with ${link.peer.id} over Tonedrop ${link.peer.mode} — about ${rate} bytes/s, any length, files allowed.`, 'ok'];
     }
     if (link.state === 'gibberlink') {
       return [`Talking gibberlink with ${link.peer.id}: text only, 140 bytes per message, no integrity check.`, 'ok'];
@@ -112,7 +112,7 @@ export function initLinkUi({ audio, download, stopOthers }) {
     try {
       const preferred = $('link-mode').value;
       const modes = [preferred, ...['turbo', 'fast', 'robust', 'stealth'].filter((m) => m !== preferred)];
-      const fs = await startMic('link', ['sonicspy', 'ggwave'], (e) => ui.link?.receive(e).catch(() => {}));
+      const fs = await startMic('link', ['tonedrop', 'ggwave'], (e) => ui.link?.receive(e).catch(() => {}));
       ui.link = new Link({ fs, play, modes, onEvent: onLinkEvent });
       $('btn-link-start').textContent = 'Close link';
       $('link-id').textContent = `You are ${ui.link.id}`;
@@ -223,7 +223,7 @@ export function initLinkUi({ audio, download, stopOthers }) {
 
   const voiceSelect = $('translate-as');
   for (const v of VOICES) voiceSelect.append(new Option(v.label, v.id));
-  voiceSelect.value = 'sonicspy:fast';
+  voiceSelect.value = 'tonedrop:fast';
 
   async function spoken() {
     const fs = await audio.context().then((ctx) => ctx.sampleRate);
@@ -244,15 +244,15 @@ export function initLinkUi({ audio, download, stopOthers }) {
   $('btn-translate-wav').addEventListener('click', async () => {
     try {
       const { samples, fs } = await spoken();
-      download(toWav(samples, fs), `sonicspy-${voiceSelect.value.replace(':', '-')}.wav`, 'audio/wav');
+      download(toWav(samples, fs), `tonedrop-${voiceSelect.value.replace(':', '-')}.wav`, 'audio/wav');
       setStatus($('translate-say-status'), 'Saved.', 'ok');
     } catch (err) {
       setStatus($('translate-say-status'), err.message, 'error');
     }
   });
 
-  /* For agents driving the page: window.sonicspy.link is the live link. */
-  globalThis.sonicspy = {
+  /* For agents driving the page: window.tonedrop.link is the live link. */
+  globalThis.tonedrop = {
     get link() {
       return ui.link;
     },

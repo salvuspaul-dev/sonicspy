@@ -57,7 +57,7 @@ page.on('response', (res) => {
 await page.goto(baseUrl, { waitUntil: 'networkidle' });
 
 /* 1. The page rendered. */
-check('page renders the app heading', (await page.locator('h1').innerText()).includes('Sonic'));
+check('page renders the app heading', (await page.locator('h1').innerText()).includes('Tone'));
 
 /* 2. Modules actually loaded — the profile readout is computed by app.js. */
 const rate = await page.locator('#profile-rate').innerText();

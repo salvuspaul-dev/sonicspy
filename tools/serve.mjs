@@ -52,5 +52,5 @@ const server = createServer(async (req, res) => {
 });
 
 server.listen(port, () => {
-  console.log(`sonicspy serving ${root} at http://localhost:${port}`);
+  console.log(`tonedrop serving ${root} at http://localhost:${port}`);
 });

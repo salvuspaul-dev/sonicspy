@@ -1,9 +1,9 @@
 /*
- * SonicSpy Link — agents and people talking over sound.
+ * Tonedrop Link — agents and people talking over sound.
  *
  * A link opens in gibberlink's language, `XY$text` over ggwave audible fast,
- * so a gibberlink agent understands every word. Two SonicSpy peers recognise
- * each other in that first exchange and move to SonicSpy's own modes: faster,
+ * so a gibberlink agent understands every word. Two Tonedrop peers recognise
+ * each other in that first exchange and move to Tonedrop's own modes: faster,
  * any length, files, Reed-Solomon plus CRC so nothing arrives garbled, and a
  * stealth mode that hides under music. A plain gibberlink peer is answered in
  * gibberlink, so nobody is left out.
@@ -96,7 +96,7 @@ export class Link {
     for (const wake of this.waiters.splice(0)) wake();
   }
 
-  /* Announce ourselves; a SonicSpy peer answers with the mode to use. */
+  /* Announce ourselves; a Tonedrop peer answers with the mode to use. */
   async hello({ salt = 0 } = {}) {
     this.#setState('calling', null);
     await this.#ggwaveText(controlMessage('?', this.modes), { control: true, salt });
@@ -133,7 +133,7 @@ export class Link {
   }
 
   async sendFile({ name, mime, data }) {
-    if (this.state !== 'linked') throw new Error('files need a SonicSpy peer; gibberlink carries text only');
+    if (this.state !== 'linked') throw new Error('files need a Tonedrop peer; gibberlink carries text only');
     const { data: body, gzipped } = await maybeCompress(data, true);
     const packed = packFileContainer({ name, mime, data: body });
     const { id, frames } = framesForBinary(packed, {
@@ -147,7 +147,7 @@ export class Link {
   /* Feed every Translator event here. */
   async receive(event) {
     if (event.channel === 'ggwave' && event.kind === 'text') return this.#fromGgwave(event);
-    if (event.channel !== 'sonicspy' || this.sentIds.has(event.id)) return undefined;
+    if (event.channel !== 'tonedrop' || this.sentIds.has(event.id)) return undefined;
     const from = this.peer?.id ?? null;
     if (event.kind === 'text') this.onEvent({ type: 'message', from, via: event.mode, text: event.text });
     if (event.kind === 'file') this.onEvent({ type: 'file', from, via: event.mode, file: event.file });

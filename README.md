@@ -1,23 +1,23 @@
-# SonicSpy
+# Tonedrop
 
 Send text, files and raw bytes between phones, laptops and AI agents **over audible sound** — no network, no pairing, no accounts. A speaker plays a stream of tones; anything with a microphone that is within earshot decodes it.
 
 It is useful when there is no usable link: no Wi-Fi, no cellular, no Bluetooth permission, air-gapped machines, or a room full of devices that all need the same payload at once. One transmitter can hand data to many receivers simultaneously, because sound is a broadcast medium — there is no connection to establish, and no limit on how many listeners there are.
 
-**SonicSpy Link** is its protocol for AI agents talking to each other over sound. It opens in [gibberlink](https://github.com/PennyroyalTea/gibberlink)'s language, so any gibberlink agent understands it, then two SonicSpy peers upgrade on the spot to SonicSpy's own modes: messages of any length, files, stealth under music, and error correction with a CRC so a message arrives exactly or not at all.
+**Tonedrop Link** is its protocol for AI agents talking to each other over sound. It opens in [gibberlink](https://github.com/PennyroyalTea/gibberlink)'s language, so any gibberlink agent understands it, then two Tonedrop peers upgrade on the spot to Tonedrop's own modes: messages of any length, files, stealth under music, and error correction with a CRC so a message arrives exactly or not at all.
 
 ## What it does
 
-- **SonicSpy Link** — agents (or people) open a link; it starts in gibberlink-compatible ggwave, recognises another SonicSpy peer in the first exchange and moves to the fastest mode both speak, or to stealth if either side prefers it. A plain gibberlink agent is answered in gibberlink.
-- **Universal translator** — one microphone, every machine language at once: SonicSpy in all four modes, ggwave and gibberlink (with sender ids), DTMF, Morse and tap code, written down as one transcript. Type text and say it in any of them.
-- **ggwave and gibberlink compatible** — the official ggwave build is vendored unmodified, so SonicSpy sends and receives every ggwave protocol, audible and ultrasound.
+- **Tonedrop Link** — agents (or people) open a link; it starts in gibberlink-compatible ggwave, recognises another Tonedrop peer in the first exchange and moves to the fastest mode both speak, or to stealth if either side prefers it. A plain gibberlink agent is answered in gibberlink.
+- **Universal translator** — one microphone, every machine language at once: Tonedrop in all four modes, ggwave and gibberlink (with sender ids), DTMF, Morse and tap code, written down as one transcript. Type text and say it in any of them.
+- **ggwave and gibberlink compatible** — the official ggwave build is vendored unmodified, so Tonedrop sends and receives every ggwave protocol, audible and ultrasound.
 - **Text, files and hex** — send a sentence, a document, an image or arbitrary bytes.
 - **Broadcast, not unicast** — a laptop plays a loop of frames; every phone in the room that is listening collects the same payload. Devices can join halfway through and still reconstruct the whole thing.
 - **Music carrier** — hide the data inside music that is already playing, so a normal playlist doubles as a data channel.
 - **Built for real rooms** — a room keeps ringing with every tone long after it stops. Rotating tone sets, echo-cancelling detection and Reed-Solomon error correction keep transfers working through that echo, not only in a quiet lab.
 - **Real-time receive** — a live spectrum display shows signal strength and which tones are arriving, with per-transfer progress.
 - **Loops long messages** — a long message is repeated so late arrivals still get every chunk, and the receiver reassembles them in any order.
-- **Stealth mode** — play any song and hide messages inside it at 17–18.6 kHz, above what most adults hear and above almost everything in recorded music. Listeners hear only the song; a phone running SonicSpy reads the message.
+- **Stealth mode** — play any song and hide messages inside it at 17–18.6 kHz, above what most adults hear and above almost everything in recorded music. Listeners hear only the song; a phone running Tonedrop reads the message.
 - **Morse, tap code and DTMF** — type text to see and hear its code, paste a code to read it, or let the microphone decode one live: a tone, a radio, a whistle, or knuckles knocking on a table. Morse auto-tunes to the pitch and learns the sender's speed; the tap decoder follows the knocker's tempo.
 - **A CLI for agents** — AI agents and scripts talk to each other by writing and reading WAV files, so no human or microphone is needed for a machine-to-machine hop. The same CLI speaks Morse, tap code, DTMF and ggwave, and `translate --json` turns any recording into one event per line.
 
@@ -25,14 +25,14 @@ It is useful when there is no usable link: no Wi-Fi, no cellular, no Bluetooth p
 
 Verified on real hardware — a RedMagic phone (Android 16) running the APK, laptop speakers half a metre away, an ordinary noisy room:
 
-- **Laptop speaker → phone mic:** SonicSpy `robust`, `fast` and `turbo` messages arrive exactly through the Listen tab. Through the Translate tab, a mixed broadcast comes out as four exact lines: a gibberlink message with its sender id, a SonicSpy `turbo` message, DTMF `*123#` and Morse `SOS`. Of seven such broadcasts, one lost its `turbo` message: `turbo` is the close-range mode and sends each frame once, where `robust` sends it twice.
-- **SonicSpy Link on the phone:** a SonicSpy peer's hello over the air linked the two on `turbo`; a 183-character message and a JSON file then arrived whole, the file with a Download button. A fresh link answered a plain gibberlink agent in gibberlink.
-- **Phone speaker → its own mic:** all ten voices tested arrived exactly — SonicSpy `fast`, `turbo`, `robust` and `stealth` (17–18.6 kHz), ggwave audible fast and fastest, ggwave ultrasound, DTMF and Morse.
+- **Laptop speaker → phone mic:** Tonedrop `robust`, `fast` and `turbo` messages arrive exactly through the Listen tab. Through the Translate tab, a mixed broadcast comes out as four exact lines: a gibberlink message with its sender id, a Tonedrop `turbo` message, DTMF `*123#` and Morse `SOS`. Of seven such broadcasts, one lost its `turbo` message: `turbo` is the close-range mode and sends each frame once, where `robust` sends it twice.
+- **Tonedrop Link on the phone:** a Tonedrop peer's hello over the air linked the two on `turbo`; a 183-character message and a JSON file then arrived whole, the file with a Download button. A fresh link answered a plain gibberlink agent in gibberlink.
+- **Phone speaker → its own mic:** all ten voices tested arrived exactly — Tonedrop `fast`, `turbo`, `robust` and `stealth` (17–18.6 kHz), ggwave audible fast and fastest, ggwave ultrasound, DTMF and Morse.
 - That hardware testing found four real defects, each now fixed with a regression test: a fixed squelch level that discarded every real frame (the phone heard −46 dBFS, the gate sat at −34); DTMF rejecting keys whose two tones arrived 9–18 dB apart; Morse keying on room noise after the decoder started on silence; and a second transmission layering over one still on air.
 
 Verified by automated tests and by rendering in a real browser:
 
-- 191 tests pass, covering the modem, Reed-Solomon codec, signalling codes, protocol, file container, ggwave interop, the translator and SonicSpy Link end to end (clean loopback on all four profiles, 10, 4 and 2 dB SNR, signals that start anywhere relative to the receiver's search grid, interference from music, late join mid-broadcast, byte-for-byte binary integrity, corrupted frames rejected by CRC, out-of-order and duplicate chunks, and a 48 kHz transmitter received by a 44.1 kHz receiver).
+- 191 tests pass, covering the modem, Reed-Solomon codec, signalling codes, protocol, file container, ggwave interop, the translator and Tonedrop Link end to end (clean loopback on all four profiles, 10, 4 and 2 dB SNR, signals that start anywhere relative to the receiver's search grid, interference from music, late join mid-broadcast, byte-for-byte binary integrity, corrupted frames rejected by CRC, out-of-order and duplicate chunks, and a 48 kHz transmitter received by a 44.1 kHz receiver).
 - A reverberant-room suite models what actually breaks acoustic links: a room that keeps ringing with each tone for hundreds of milliseconds. The first version of this modem decoded **no frames at all** at half a metre to a metre in a furnished room. Two defects were behind it — a symbol-timing lock that settled up to half a symbol early, and a detector that mistook the previous tone's echo for the current one — and both are fixed, each with a regression test that fails on the old code.
 - An adversarial suite assumes the sender is hostile, because anyone in earshot can transmit. It covers messages past the 16-bit chunk limit, frames numbering themselves outside their declared total, headers fuzzed with random fields, conflicting chunk totals across a reused message id, unbounded message-id churn, truncated file containers, corrupt and endlessly expanding gzip, and payload integrity across every byte value. Seven defects it found are fixed; each is recorded at the top of `tests/adversarial.test.mjs`.
 - A separate suite models the impairments that only exist between two physical devices, none of which appear in an idealised channel: independent sample clocks (drift up to ±1000 ppm, both directions, on every profile), transducer frequency response (500 Hz high-pass and 7.5 kHz low-pass), an overdriven amplifier clipping to a quarter of full scale, DC offset plus 50 Hz mains hum, a room reflection arriving 18 ms late, and a capture callback delivering audio in awkward chunk sizes (single samples, primes, random 1–8192, 64 K blocks).
@@ -42,11 +42,11 @@ Verified by automated tests and by rendering in a real browser:
 
 **Not yet verified:** two phones linking to each other. With one phone available, the phone's receive path was tested from laptop speakers and its transmit path by hearing itself, but a second device has not yet heard the phone. Range beyond about a metre, and stealth from laptop speakers (the 17–19.5 kHz band arrived about 45 dB down on this laptop, too weak to decode reliably), are unmeasured.
 
-## SonicSpy Link and gibberlink
+## Tonedrop Link and gibberlink
 
-Gibberlink showed two AI voice agents recognising each other and switching to ggwave tones. SonicSpy Link speaks that language and goes further:
+Gibberlink showed two AI voice agents recognising each other and switching to ggwave tones. Tonedrop Link speaks that language and goes further:
 
-| | gibberlink (ggwave) | SonicSpy |
+| | gibberlink (ggwave) | Tonedrop |
 | --- | --- | --- |
 | Talks to gibberlink agents | yes | yes — the Link opens in gibberlink's `XY$text` format over ggwave |
 | Longest message | 140 bytes; ggwave cuts longer input silently | any length, chunked and reassembled in any order |
@@ -59,21 +59,21 @@ Gibberlink showed two AI voice agents recognising each other and switching to gg
 
 Speed is a wash at the top end; the differences are integrity, length, files and stealth.
 
-**ggwave can deliver garbled text as if it were fine.** With no noise at all, on a perfect digital loopback, ggwave 0.4.0 from npm decodes `ABCDE` on its audible fast and fastest protocols as different bytes at 2 of 32 sample alignments, and reports success; the build gibberlink ships garbles it the same way. Its dual-tone protocols fail for ordinary sentences. It has no CRC behind its short Reed-Solomon code. SonicSpy therefore decodes every ggwave message it is about to send at 16 alignments first and refuses one that would arrive wrong, never sends the dual-tone protocols, puts a check byte on its own handshake, and repeats an unanswered hello with different padding. Once two SonicSpy peers are linked, ggwave is no longer used. Two smaller traps are handled too: ggwave's decoder silently finds nothing unless each block is a whole number of its 1024-sample frames, and it holds only four instances at once.
+**ggwave can deliver garbled text as if it were fine.** With no noise at all, on a perfect digital loopback, ggwave 0.4.0 from npm decodes `ABCDE` on its audible fast and fastest protocols as different bytes at 2 of 32 sample alignments, and reports success; the build gibberlink ships garbles it the same way. Its dual-tone protocols fail for ordinary sentences. It has no CRC behind its short Reed-Solomon code. Tonedrop therefore decodes every ggwave message it is about to send at 16 alignments first and refuses one that would arrive wrong, never sends the dual-tone protocols, puts a check byte on its own handshake, and repeats an unanswered hello with different padding. Once two Tonedrop peers are linked, ggwave is no longer used. Two smaller traps are handled too: ggwave's decoder silently finds nothing unless each block is a whole number of its 1024-sample frames, and it holds only four instances at once.
 
 ## Translator
 
-The **Translate** tab listens for SonicSpy (all four modes), ggwave/gibberlink and DTMF at once; Morse and tap code can be switched on, since in a noisy room (a fan, a hum) they write down noise. Each message appears once, labelled with its protocol and, for gibberlink, its sender id. Morse and tap code are read from rhythm alone, so the tones of every other protocol look like Morse to them: while a structured protocol is on air their letters are set aside, and their decoders restart afterwards. On the phone the whole translator uses about 5% of one core's real time.
+The **Translate** tab listens for Tonedrop (all four modes), ggwave/gibberlink and DTMF at once; Morse and tap code can be switched on, since in a noisy room (a fan, a hum) they write down noise. Each message appears once, labelled with its protocol and, for gibberlink, its sender id. Morse and tap code are read from rhythm alone, so the tones of every other protocol look like Morse to them: while a structured protocol is on air their letters are set aside, and their decoders restart afterwards. On the phone the whole translator uses about 5% of one core's real time.
 
-The same tab speaks: type text and play it, or save it as a WAV, as any SonicSpy mode, any ggwave protocol, Morse, DTMF or tap code.
+The same tab speaks: type text and play it, or save it as a WAV, as any Tonedrop mode, any ggwave protocol, Morse, DTMF or tap code.
 
 ```bash
-node tools/sonicspy-cli.mjs say --text "is it better now?" --as gg-fast --from AB --out gb.wav
-node tools/sonicspy-cli.mjs translate --in recording.wav
-node tools/sonicspy-cli.mjs translate --in recording.wav --json   # one event per line, for agents
+node tools/tonedrop-cli.mjs say --text "is it better now?" --as gg-fast --from AB --out gb.wav
+node tools/tonedrop-cli.mjs translate --in recording.wav
+node tools/tonedrop-cli.mjs translate --in recording.wav --json   # one event per line, for agents
 ```
 
-In the page, `window.sonicspy.link` is the live link, so an agent driving the browser can call `say()` and `sendFile()` directly.
+In the page, `window.tonedrop.link` is the live link, so an agent driving the browser can call `say()` and `sendFile()` directly.
 
 ## Throughput
 
@@ -121,9 +121,9 @@ The **Codes** tab and the CLI handle three classic codes in both directions:
 Tested: Morse round-trips from 8 to 35 wpm, at any pitch in range, at −10 dB broadband SNR, across a change of sender speed and through a noisy room; knocks round-trip at different tempos and in noise; DTMF survives noise, 50 ms tones, 44.1 kHz capture and row and column tones arriving up to 18 dB apart; noise, a held whistle, a single held keypad tone and music chords never decode as anything. Over the air on a real phone, DTMF and Morse decode exactly from laptop speakers and from the phone's own speaker. Tap code has not been tested with real knocks.
 
 ```bash
-node tools/sonicspy-cli.mjs code --type morse --text "sos" --out sos.wav --wpm 20
-node tools/sonicspy-cli.mjs code --type morse --in recording.wav
-node tools/sonicspy-cli.mjs code --type tap --code "52 11 44 15 42"
+node tools/tonedrop-cli.mjs code --type morse --text "sos" --out sos.wav --wpm 20
+node tools/tonedrop-cli.mjs code --type morse --in recording.wav
+node tools/tonedrop-cli.mjs code --type tap --code "52 11 44 15 42"
 ```
 
 ## Quick start
@@ -139,18 +139,18 @@ Open the page in two devices on the same machine or in the same room, press **Li
 
 ```bash
 # Encode text to a WAV you can play
-node tools/sonicspy-cli.mjs encode --profile fast --text "meet at 0400" --out msg.wav
+node tools/tonedrop-cli.mjs encode --profile fast --text "meet at 0400" --out msg.wav
 
 # Decode a WAV back to text (profile is auto-detected)
-node tools/sonicspy-cli.mjs decode --in msg.wav
+node tools/tonedrop-cli.mjs decode --in msg.wav
 
 # Verify the modem end to end without any audio hardware
-node tools/sonicspy-cli.mjs selftest
+node tools/tonedrop-cli.mjs selftest
 ```
 
 ## Building the Android APK
 
-The APK in `dist/sonicspy.apk` is a **debug-signed** build: it installs by sideloading on any device, but it is not suitable for store distribution. To build it yourself:
+The APK in `dist/tonedrop.apk` is a **debug-signed** build: it installs by sideloading on any device, but it is not suitable for store distribution. To build it yourself:
 
 ```bash
 npm install
@@ -223,14 +223,14 @@ web/src/rs.js           Reed-Solomon encoder and decoder over GF(256)
 web/src/codes.js        Morse, tap code and DTMF: encoders, synthesis, live decoders
 web/src/ggwave.js       ggwave/gibberlink: encode with self-check, streaming decode, XY$ framing
 web/src/translator.js   every protocol decoded from one stream; text spoken as any of them
-web/src/link.js         SonicSpy Link: handshake, mode upgrade, text and files
+web/src/link.js         Tonedrop Link: handshake, mode upgrade, text and files
 web/src/protocol.js     framing, chunking, reassembly, hex helpers
 web/src/transfer.js     file container, gzip, transfer estimates
 web/src/audio.js        Web Audio I/O, music carrier, WAV read/write
 web/src/app.js          UI wiring, spectrum display, in-page self-test
 web/src/ui-link.js      the Link and Translate tabs
 web/vendor/ggwave.js    ggwave 0.4.0, unmodified (MIT, Georgi Gerganov)
-tools/sonicspy-cli.mjs  encode/decode/say/translate/selftest for agents and scripts
+tools/tonedrop-cli.mjs  encode/decode/say/translate/selftest for agents and scripts
 tools/serve.mjs         dependency-free static server
 tests/                  modem, protocol, adversarial and real-browser tests
 android/                Capacitor native project

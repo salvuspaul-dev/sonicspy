@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="color-scheme" content="dark" />
-    <title>SonicSpy — data over sound</title>
+    <title>Tonedrop — data over sound</title>
     <link
       rel="icon"
       href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23070b16'/><g fill='%234ade80'><rect x='7' y='12' width='3' height='8' rx='1.5'/><rect x='12.5' y='8' width='3' height='16' rx='1.5'/><rect x='18' y='5' width='3' height='22' rx='1.5'/><rect x='23.5' y='11' width='3' height='10' rx='1.5'/></g></svg>"
@@ -14,7 +14,7 @@
   <body>
     <header class="top">
       <div>
-        <h1>Sonic<span>Spy</span></h1>
+        <h1>Tone<span>drop</span></h1>
         <p class="tagline">
           Send messages, files and raw data between devices using sound alone — no network, no
           pairing, no accounts. Tones carry the bytes; any speaker and microphone will do.
@@ -144,11 +144,11 @@
 
       <!-- ------------------------------------------------------------- LINK -->
       <section class="panel" id="panel-link">
-        <h2>SonicSpy Link</h2>
+        <h2>Tonedrop Link</h2>
         <p class="hint">
           AI agents and people talking over sound. A link opens in gibberlink's language (ggwave),
-          so any gibberlink agent understands it. When the other side is SonicSpy too, both move to
-          SonicSpy's own modes: faster, any length, files, error-corrected so nothing arrives
+          so any gibberlink agent understands it. When the other side is Tonedrop too, both move to
+          Tonedrop's own modes: faster, any length, files, error-corrected so nothing arrives
           garbled, and a stealth mode that hides under music.
         </p>
         <div class="row options">
@@ -191,7 +191,7 @@
       <section class="panel" id="panel-translate">
         <h2>Translator</h2>
         <p class="hint">
-          Hears machine languages and writes them down: SonicSpy in all four modes, ggwave and
+          Hears machine languages and writes them down: Tonedrop in all four modes, ggwave and
           gibberlink, DTMF keypad tones, Morse and tap code. Morse and tap are read from rhythm
           alone, so while another protocol is on air their guesses are set aside.
         </p>
@@ -208,7 +208,7 @@
         <div id="translate-log" class="messages chat"></div>
 
         <h3>Say it in any of them</h3>
-        <textarea id="translate-text" rows="2" placeholder="Type text to speak as SonicSpy, ggwave, Morse, DTMF or tap code…"></textarea>
+        <textarea id="translate-text" rows="2" placeholder="Type text to speak as Tonedrop, ggwave, Morse, DTMF or tap code…"></textarea>
         <div class="row actions">
           <select id="translate-as"></select>
           <button id="btn-translate-play" class="primary">Play</button>
@@ -326,24 +326,24 @@
 
         <h3>Command line</h3>
         <pre class="code"># Encode a message or a file into a WAV an agent can play or hand to another agent
-node tools/sonicspy-cli.mjs encode --text "hello" --out hello.wav --profile fast
-node tools/sonicspy-cli.mjs encode --file report.json --out report.wav --profile turbo
+node tools/tonedrop-cli.mjs encode --text "hello" --out hello.wav --profile fast
+node tools/tonedrop-cli.mjs encode --file report.json --out report.wav --profile turbo
 
 # Decode a recording back into messages and files
-node tools/sonicspy-cli.mjs decode --in recording.wav --out-dir received/
+node tools/tonedrop-cli.mjs decode --in recording.wav --out-dir received/
 
 # Inspect the link without sending anything
-node tools/sonicspy-cli.mjs selftest --profile turbo
+node tools/tonedrop-cli.mjs selftest --profile turbo
 
 # Morse, tap code and DTMF, as text or as audio
-node tools/sonicspy-cli.mjs code --type morse --text "sos" --out sos.wav
-node tools/sonicspy-cli.mjs code --type morse --in recording.wav
+node tools/tonedrop-cli.mjs code --type morse --text "sos" --out sos.wav
+node tools/tonedrop-cli.mjs code --type morse --in recording.wav
 
 # Speak to a gibberlink agent, or in any other voice
-node tools/sonicspy-cli.mjs say --text "is it better now?" --as gg-fast --from AB --out gb.wav
+node tools/tonedrop-cli.mjs say --text "is it better now?" --as gg-fast --from AB --out gb.wav
 
 # Everything in a recording, one JSON event per line
-node tools/sonicspy-cli.mjs translate --in recording.wav --json</pre>
+node tools/tonedrop-cli.mjs translate --in recording.wav --json</pre>
 
         <h3>Frame format</h3>
         <p class="hint">
@@ -390,7 +390,7 @@ node tools/sonicspy-cli.mjs translate --in recording.wav --json</pre>
           quickest way to confirm the link works on this hardware.
         </p>
         <div class="row">
-          <input type="text" id="selftest-text" value="sonicspy self test" />
+          <input type="text" id="selftest-text" value="tonedrop self test" />
           <button id="btn-selftest" class="primary">Run self-test</button>
         </div>
         <div id="selftest-result" class="selftest"></div>
