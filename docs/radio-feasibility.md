@@ -4,16 +4,17 @@ Feasibility test, 2026-10-23. Simulation plus one over-the-air check on a real p
 
 ## Answer
 
-**Go for FM** with the profiles Tonedrop already ships. Fast decoded all 16 runs at every simulated FM level down to −5 dB; turbo lost 1 of 16 at 0 and −5 dB. A phone decoded simulated-FM audio played through a laptop speaker.
+**Go for FM.** With the profiles Tonedrop already ships, fast decoded all 16 runs at every simulated FM level down to −5 dB, and turbo lost 1 of 16 at 0 and −5 dB. A phone decoded simulated-FM audio played through a laptop speaker. The Wave OFDM modem, which is not merged yet, is much faster: sent at DBPSK 1/2, it passed 16/16 down to 0 dB at 125 B/s, five times turbo. Its floor is 5 dB higher than fast's, which costs little, because anyone tuned in on purpose has far better reception than 0 dB.
 
-**Go for AM only with a narrow-band voice.** AM's audio stops near 4.5 kHz, and every current Tonedrop profile reaches 7 kHz, so all of them failed AM in every run. Two voices that do fit worked:
+**Go for AM only with a narrow-band voice.** AM's audio stops near 4.5 kHz, and every current Tonedrop profile reaches 7 kHz, so all of them failed AM in every run. Three voices that do fit worked:
 
+- Wave Far (900–4,000 Hz), sent at DBPSK 1/2, passed 16/16 down to 0 dB at 53.5 B/s. That is 3.7 times `radio-am` with the same floor. It needs Wave merged.
 - A candidate profile kept between 600 and 3,412 Hz (`radio-am` below) passed 16/16 down to 0 dB.
 - ggwave's fastest protocol, which today's app already decodes, passed 16/16 at 10 dB and above. It gives out 5 dB sooner than `radio-am`.
 
-**No-go for stealth on any radio.** Its 17–18.5 kHz tones sit above FM's 15 kHz stereo-encoder filter and far above AM's band.
+**No-go for any inaudible voice on radio.** Stealth's 17–18.5 kHz tones and Wave Ultra's 17.5–20.5 kHz carriers sit above FM's 15 kHz stereo-encoder filter and far above AM's band. Both failed every radio run.
 
-In a 5-minute slot, FM carries about 7.6 KB with turbo, roughly 95 short bulletins. AM carries 4.3 KB with `radio-am` (about 54 bulletins), or 7.6 KB with ggwave fastest where reception is good.
+In a 5-minute slot, FM carries about 37.6 KB with Wave at DBPSK 1/2, roughly 475 short bulletins, or 7.6 KB (about 95) with turbo in today's app. AM carries 16.1 KB with Wave Far at DBPSK 1/2 (about 203 bulletins), 4.3 KB with `radio-am` (about 54), or 7.6 KB with ggwave fastest where reception is good.
 
 ## What was tested
 
@@ -27,7 +28,7 @@ Every channel ends in that same acoustic stage: a small radio speaker (180 Hz–
 
 The sweep sent 16 different 79-byte bulletins per cell, for example "#3 Rain from 14:00, wind 23 km/h. Maize 383/90kg at Kasese. Clinic open Sat 9-1." A cell counts a run as a success only when the exact text comes back.
 
-**What "SNR" means here.** For FM and AM it is the reception quality: signal against receiver noise across the whole audio band after the receiver. For the room channel it is signal against room hum. A tone modem puts all its power into one narrow tone at a time, so it decodes at wideband SNRs where speech or music would be unlistenable. Anyone tuned to a station on purpose has reception far better than 20 dB. The failure points found here are a wide margin, not an operating point. Every voice tested failed every run at −10 dB and below.
+**What "SNR" means here.** For FM and AM it is the reception quality: signal against receiver noise across the whole audio band after the receiver. For the room channel it is signal against room hum. A tone modem puts all its power into one narrow tone at a time, so it decodes at wideband SNRs where speech or music would be unlistenable. Anyone tuned to a station on purpose has reception far better than 20 dB. The failure points found here are a wide margin, not an operating point. Every MFSK and ggwave voice tested failed every run at −10 dB and below. Wave was not run below −5 dB, and on radio it was already failing there.
 
 ### What each band lets through
 
@@ -100,6 +101,42 @@ ggwave refuses to encode some exact messages, because it would garble them (a kn
 
 A low-SNR sweep (6 runs per cell, fast, turbo, radio-am, radio-fm, gg-fast and gg-fastest, FM and AM) found 0 decodes at −10, −15 and −20 dB for every voice on both channels.
 
+### Wave (OFDM), measured from its branch
+
+Wave is committed on `feat/tonedrop-wave` (`53b0a3f`) and is not merged to `main`, so `tools/radio-channel.mjs` cannot import it. These rows were measured with a scratch script that imports that branch's `web/src/wave.js` and `protocol.js` read-only. It used main's `simulateRadio`, the same 16 bulletins, the same seeds and the same exact-text rule. Each profile ran at its default modcod (DQPSK 1/2), and Wave and Wave Far also ran at the most robust one (DBPSK 1/2). One-way radio has no return path, so the sender has to choose the modcod itself.
+
+**FM**
+
+| voice | 20 dB | 10 dB | 5 dB | 0 dB | −5 dB | airtime | B/s |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| wave, DQPSK 1/2 | 16/16 | 16/16 | 16/16 | 11/16 | 0/16 | 0.4 s | 189.0 |
+| wave, DBPSK 1/2 | 16/16 | 16/16 | 16/16 | 16/16 | 0/16 | 0.6 s | 125.3 |
+| wave-far, DQPSK 1/2 | 16/16 | 16/16 | 16/16 | 16/16 | 0/16 | 1.1 s | 75.1 |
+| wave-far, DBPSK 1/2 | 16/16 | 16/16 | 16/16 | 16/16 | 9/16 | 1.5 s | 53.5 |
+| wave-ultra, DQPSK 1/2 | 0/16 | 0/16 | 0/16 | 0/16 | 0/16 | 0.7 s | 0.0 |
+
+**AM**
+
+| voice | 20 dB | 10 dB | 5 dB | 0 dB | −5 dB | airtime | B/s |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| wave, DQPSK 1/2 | 12/16 | 7/16 | 0/16 | 0/16 | 0/16 | 0.4 s | 141.7 |
+| wave, DBPSK 1/2 | 16/16 | 16/16 | 15/16 | 0/16 | 0/16 | 0.6 s | 125.3 |
+| wave-far, DQPSK 1/2 | 16/16 | 16/16 | 16/16 | 0/16 | 0/16 | 1.1 s | 75.1 |
+| wave-far, DBPSK 1/2 | 16/16 | 16/16 | 16/16 | 16/16 | 0/16 | 1.5 s | 53.5 |
+| wave-ultra, DQPSK 1/2 | 0/16 | 0/16 | 0/16 | 0/16 | 0/16 | 0.7 s | 0.0 |
+
+**Room only, no radio (baseline)**
+
+| voice | 20 dB | 10 dB | 5 dB | 0 dB | −5 dB | airtime | B/s |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| wave, DQPSK 1/2 | 16/16 | 16/16 | 16/16 | 15/16 | 0/16 | 0.4 s | 189.0 |
+| wave, DBPSK 1/2 | 16/16 | 16/16 | 16/16 | 16/16 | 0/16 | 0.6 s | 125.3 |
+| wave-far, DQPSK 1/2 | 16/16 | 16/16 | 16/16 | 5/16 | 0/16 | 1.1 s | 75.1 |
+| wave-far, DBPSK 1/2 | 16/16 | 16/16 | 16/16 | 16/16 | 0/16 | 1.5 s | 53.5 |
+| wave-ultra, DQPSK 1/2 | 16/16 | 16/16 | 16/16 | 16/16 | 16/16 | 0.7 s | 112.7 |
+
+Wave (1–7 kHz) partly survives AM even though AM removes about 17 dB from its carriers above 4.5 kHz. Its error coding rebuilds what the lower carriers carry, but only with strong reception. Wave Far fits under AM's cutoff and loses nothing. Over the air, Wave was not tested on radio audio, because the phone's installed build has no Wave.
+
 ### Over the air on a real phone
 
 Simulated-radio WAVs were played from the laptop's speakers (ffplay). A RedMagic phone (NX809J) running the installed Tonedrop build (version 1.0, still labelled SonicSpy) listened in its Translate tab:
@@ -119,9 +156,13 @@ Bytes per second of air, times 300 s, for back-to-back 79-byte bulletins at the 
 
 | Band | Voice | B/s | Per 5 min | Bulletins |
 |---|---|---:|---:|---:|
+| FM | wave, DQPSK 1/2, at 5 dB or better (needs Wave merged) | 189.0 | 56.7 KB | ~717 |
+| FM | wave, DBPSK 1/2 (needs Wave merged) | 125.3 | 37.6 KB | ~475 |
 | FM | tonedrop:turbo | 25.2 | 7.6 KB | ~95 |
 | FM | tonedrop:fast | 20.8 | 6.2 KB | ~79 |
 | FM | tonedrop:robust | 7.2 | 2.2 KB | ~27 |
+| AM | wave, DBPSK 1/2, at 10 dB or better (needs Wave merged) | 125.3 | 37.6 KB | ~475 |
+| AM | wave-far, DBPSK 1/2 (needs Wave merged) | 53.5 | 16.1 KB | ~203 |
 | AM | radio-am | 14.4 | 4.3 KB | ~54 |
 | AM | gg-fastest, at 10 dB or better | 25.4 | 7.6 KB | ~96 |
 
@@ -129,11 +170,12 @@ A broadcast has listeners who tune in late. Tonedrop's broadcast loop lets them 
 
 ## Modem settings radio needs
 
-1. **AM:** keep every tone between about 600 and 3,400 Hz. The `radio-am` candidate does this at 14.4 B/s and has the most margin. To ship it, add it to `PROFILES` in `web/src/modem.js`. The app only decodes its built-in profiles, which is why the over-the-air AM check used ggwave. Until then, ggwave fastest works with today's app, but only where reception is good.
-2. **FM:** use fast or turbo unchanged. The wider `radio-fm` candidate is no faster than turbo, and it was only marginally sturdier (room at −5 dB: 15/16 against turbo's 11/16), which isn't enough to justify another profile.
-3. **Never stealth** on radio.
-4. **Loop the slot.** Use broadcast-loop mode so a late listener finishes the message on the next pass.
-5. **No level or processing workarounds were needed.** AGC, multiband compression, the limiter and pre-emphasis did not break any profile whose tones fit the band.
+1. **AM:** keep every tone below about 4 kHz. Once Wave is merged, Wave Far at DBPSK 1/2 does this at 53.5 B/s and holds to 0 dB, the same floor as `radio-am` at 3.7 times the speed. That makes `radio-am` unnecessary. Before Wave lands, the choice is between `radio-am` (add it to `PROFILES` in `web/src/modem.js`; the app only decodes built-in profiles, which is why the over-the-air AM check used ggwave) and ggwave fastest, which works with today's app but only where reception is good.
+2. **FM:** in today's app, use fast or turbo unchanged. The wider `radio-fm` candidate is no faster than turbo, and it was only marginally sturdier (room at −5 dB: 15/16 against turbo's 11/16), which isn't enough to justify another profile. Once Wave is merged, use Wave at DBPSK 1/2 (125 B/s, to 0 dB), or DQPSK 1/2 (189 B/s) where reception is 5 dB or better.
+3. **Pin Wave's modcod for broadcast.** Wave's sender uses DQPSK 1/2 unless told otherwise. Its rate adaptation needs a return path, which a broadcast does not have. A radio mode should send DBPSK 1/2 (modcod 0). On the branch today, `Link` only picks modcod 0 for its own control frames, and nothing in the UI sets it.
+4. **Never stealth or Wave Ultra** on radio.
+5. **Loop the slot.** Use broadcast-loop mode so a late listener finishes the message on the next pass.
+6. **No level or processing workarounds were needed.** AGC, multiband compression, the limiter and pre-emphasis did not break any profile whose tones fit the band, Wave's included.
 
 ## Limits of this test
 
@@ -141,7 +183,9 @@ A broadcast has listeners who tune in late. Tonedrop's broadcast loop lets them 
 - **Not modelled:** FM multipath, AM fading and skywave, co-channel and adjacent-channel interference, stereo/mono switching, and the variety of real receivers.
 - **One acoustic setting:** the phone half a metre from the speaker. Across a large room, the reverberant sound grows relative to the direct sound.
 - **The over-the-air check** used one phone and the laptop's speaker. It was not a radio.
-- **The Wave OFDM modem is pending.** It lives on `feat/tonedrop-wave`, which is not merged to `main`, so it is not in this sweep. Once it lands, add it to `VOICES` in `tools/radio-channel.mjs` and rerun.
+- **Wave was measured from its unmerged branch** (`53b0a3f`) with a scratch script, not with `tools/radio-channel.mjs sweep`. Once Wave lands, add its profiles to `VOICES` there, with `modcod` passed through, and rerun so the result can be reproduced from `main`.
+- **Wave is more exposed to hard station clipping than MFSK.** An OFDM signal has much higher peaks than a single tone, so a processor that clips harder than this model hits Wave first. The real-station test below matters most for Wave.
+- **Wave has no over-the-air result on radio audio.** The phone's installed build predates it.
 
 ## Next step
 
