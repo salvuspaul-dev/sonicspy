@@ -181,9 +181,10 @@ export class SonicAudio {
      * runs on the main thread either way. */
     const processor = ctx.createScriptProcessor(4096, 1, 1);
     this.processor = processor;
+    const clean = dropoutFilter();
     processor.onaudioprocess = (event) => {
-      const input = event.inputBuffer.getChannelData(0);
-      onSamples(Float32Array.from(input));
+      const chunk = clean(event.inputBuffer.getChannelData(0));
+      if (chunk.length) onSamples(chunk);
     };
     source.connect(processor);
     /* A ScriptProcessor only runs while connected to a destination; a muted
@@ -242,6 +243,31 @@ export class SonicAudio {
     this.analyser.getByteFrequencyData(data);
     return { data, sampleRate: this.ctx.sampleRate, fftSize: this.analyser.fftSize };
   }
+}
+
+/* Android's WebView capture now and then inserts 40 ms of digital silence when
+ * its input runs dry. The gap shifts every later symbol, so the frame in flight
+ * is lost; a real microphone never returns this many exact zeros in a row, so
+ * the run is dropped. Zeros at the end of a chunk are held back until the run's
+ * length is known. */
+const DROPOUT_SAMPLES = 256;
+
+export function dropoutFilter() {
+  let held = 0;
+  return (input) => {
+    const out = new Float32Array(input.length + Math.min(held, DROPOUT_SAMPLES));
+    let n = 0;
+    for (const v of input) {
+      if (v === 0) {
+        held++;
+        continue;
+      }
+      if (held < DROPOUT_SAMPLES) n += held; // out starts zero-filled
+      held = 0;
+      out[n++] = v;
+    }
+    return out.subarray(0, n);
+  };
 }
 
 export function toWav(samples, sampleRate) {
