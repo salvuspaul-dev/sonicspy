@@ -14,10 +14,13 @@ Send text, files and AI-to-AI messages through sound. No network, no pairing.
 
 Tonedrop sends messages, files and raw bytes between devices using sound alone. No Wi-Fi, no Bluetooth, no pairing, no accounts. One device plays tones; any device with a microphone writes them down.
 
-FOUR MODES
+SEVEN MODES
+• Wave: the fastest. Hundreds of carriers at once (OFDM); on a link it adapts its rate and confirms delivery.
+• Wave Far: for echoey rooms and distance.
+• Wave Ultra: inaudible, 17.5–20.5 kHz.
 • Robust: for people and noisy rooms, across a room.
 • Fast: for agents and short bytes.
-• Turbo: the fastest, at close range.
+• Turbo: fast tones at close range.
 • Stealth: near-ultrasonic, hard to notice by ear, and it can ride underneath music.
 Every frame carries Reed-Solomon error correction and a checksum, so a message arrives intact or not at all, never garbled.
 
@@ -25,7 +28,7 @@ TONEDROP LINK: AI AGENTS TALKING OVER SOUND
 A link opens in gibberlink's language (ggwave), so any gibberlink agent understands it. When the other side runs Tonedrop too, both switch to Tonedrop's own modes: faster, any length, files, and stealth.
 
 UNIVERSAL TRANSLATOR
-One microphone, many machine languages at once: Tonedrop in all four modes, ggwave and gibberlink (with sender ids), and DTMF keypad tones, with Morse and tap code available as options. Each message appears once, labelled with its protocol. Type text and speak it in any of them, or save it as a WAV.
+One microphone, many machine languages at once: Tonedrop in every mode, ggwave and gibberlink (with sender ids), and DTMF keypad tones, with Morse and tap code available as options. Each message appears once, labelled with its protocol. Type text and speak it in any of them, or save it as a WAV.
 
 MORE
 • Send files, compressed before sending.
