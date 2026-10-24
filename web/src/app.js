@@ -332,6 +332,7 @@ $('btn-listen').addEventListener('click', async () => {
   }
   stopCodeListening();
   linkUi.stop();
+  $('btn-listen').disabled = true;
   try {
     state.reassembler = new Reassembler({
       onProgress: renderPending,
@@ -349,6 +350,8 @@ $('btn-listen').addEventListener('click', async () => {
     $('device-info').textContent = `capture ${fs} Hz · ${carriers} · squelch ${$('squelch').value}`;
   } catch (err) {
     setStatus($('listen-status'), `Microphone unavailable: ${err.message}`, 'error');
+  } finally {
+    $('btn-listen').disabled = false;
   }
 });
 
