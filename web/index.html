@@ -23,6 +23,9 @@
       <div class="profile-box">
         <label for="profile-select">Profile</label>
         <select id="profile-select">
+          <option value="wave">Wave — fastest, OFDM, any speaker</option>
+          <option value="wave-far">Wave Far — echoey rooms, distance</option>
+          <option value="wave-ultra">Wave Ultra — inaudible, 17.5–20.5 kHz</option>
           <option value="robust">Robust — people, noisy rooms</option>
           <option value="fast">Fast — agents and bytes</option>
           <option value="turbo">Turbo — files, quiet room</option>
@@ -155,7 +158,10 @@
           <label class="inline">
             Prefer
             <select id="link-mode">
-              <option value="turbo">Turbo — fastest, close range</option>
+              <option value="wave">Wave — fastest, adapts its rate, confirms delivery</option>
+              <option value="wave-far">Wave Far — echoey rooms, distance</option>
+              <option value="wave-ultra">Wave Ultra — inaudible</option>
+              <option value="turbo">Turbo — MFSK, close range</option>
               <option value="fast">Fast — agents and bytes</option>
               <option value="robust">Robust — across a noisy room</option>
               <option value="stealth">Stealth — near-ultrasonic</option>
@@ -404,7 +410,17 @@ node tools/tonedrop-cli.mjs translate --in recording.wav --json</pre>
         </table>
 
         <h3>How it works</h3>
-        <p class="hint">
+        <p class="hint" id="how-wave" hidden>
+          Wave is OFDM: hundreds of carriers sound at once, and each carries one to three bits as
+          the change in its phase since the previous symbol, so the receiver never has to learn
+          the room's response. A rising chirp marks where a frame starts, a guard interval at the
+          front of each symbol soaks up the echoes, and pilot carriers track the speaker's and
+          microphone's clocks as they drift apart. A convolutional code decoded with soft Viterbi
+          and Reed-Solomon parity repair what noise breaks, interleaving spreads a burst of damage
+          thin, and a CRC has the final say. Fountain repair frames mean any K or so of a message's
+          frames rebuild it, whichever ones were lost.
+        </p>
+        <p class="hint" id="how-mfsk">
           Data is sent as MFSK: a short window of one pure tone per symbol, phases continuous so
           the sound is clean. The receiver measures the energy at each expected tone frequency with
           a Goertzel filter over a Hann window and takes the strongest — no carrier lock needed,

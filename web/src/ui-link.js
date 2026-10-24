@@ -4,8 +4,8 @@
  */
 
 import { Translator, CHANNELS, DEFAULT_CHANNELS, VOICES, speak } from './translator.js';
-import { Link } from './link.js';
-import { PROFILES } from './modem.js';
+import { Link, LINK_MODES } from './link.js';
+import { MODES } from './modem.js';
 import { payloadBytesPerSecond, formatBytes } from './transfer.js';
 import { toWav } from './audio.js';
 
@@ -79,7 +79,7 @@ export function initLinkUi({ audio, download, stopOthers }) {
 
   function describe(link) {
     if (link.state === 'linked') {
-      const rate = payloadBytesPerSecond(PROFILES[link.peer.mode]).toFixed(0);
+      const rate = payloadBytesPerSecond(MODES[link.peer.mode]).toFixed(0);
       return [`Linked with ${link.peer.id} over Tonedrop ${link.peer.mode} — about ${rate} bytes/s, any length, files allowed.`, 'ok'];
     }
     if (link.state === 'gibberlink') {
@@ -99,8 +99,9 @@ export function initLinkUi({ audio, download, stopOthers }) {
     }
     if (e.type === 'file') fileLine(log, { who: e.from ?? 'unknown', via: e.via, file: e.file, download });
     if (e.type === 'sent') {
-      if (e.file) fileLine(log, { who: 'you', via: e.via, file: e.file, download });
-      else line(log, { who: 'you', via: e.via, text: e.text, kind: 'mine' });
+      const via = e.delivered === undefined ? e.via : `${e.via} · ${e.delivered ? 'delivered' : 'not confirmed'}`;
+      if (e.file) fileLine(log, { who: 'you', via, file: e.file, download });
+      else line(log, { who: 'you', via, text: e.text, kind: 'mine' });
     }
   }
 
@@ -111,7 +112,7 @@ export function initLinkUi({ audio, download, stopOthers }) {
     }
     try {
       const preferred = $('link-mode').value;
-      const modes = [preferred, ...['turbo', 'fast', 'robust', 'stealth'].filter((m) => m !== preferred)];
+      const modes = [preferred, ...LINK_MODES.filter((m) => m !== preferred)];
       const fs = await startMic('link', ['tonedrop', 'ggwave'], (e) => ui.link?.receive(e).catch(() => {}));
       ui.link = new Link({ fs, play, modes, onEvent: onLinkEvent });
       $('btn-link-start').textContent = 'Close link';
@@ -166,6 +167,7 @@ export function initLinkUi({ audio, download, stopOthers }) {
   const channels = () => [...channelBox.querySelectorAll('input:checked')].map((b) => b.value);
 
   function onHeard(e) {
+    if (e.kind === 'ack' || e.kind === 'again') return;
     const label = `${CHANNELS[e.channel]}${e.mode ? ` ${e.mode}` : ''}`;
     if (e.kind === 'partial') {
       $('translate-live').textContent = `hearing ${label}: ${e.text}`;

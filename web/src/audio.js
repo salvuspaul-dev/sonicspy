@@ -162,6 +162,10 @@ export class SonicAudio {
   async startListening(onSamples) {
     const ctx = await this.context();
     const stream = await navigator.mediaDevices.getUserMedia(MIC_CONSTRAINTS);
+    /* A start that overlapped this one (a second tap while the permission
+     * prompt was open) may already own a pipeline. Two pipelines would feed one
+     * receiver interleaved chunks, and stopListening could only reach the last. */
+    this.stopListening();
     this.stream = stream;
     const source = ctx.createMediaStreamSource(stream);
     this.micSource = source;

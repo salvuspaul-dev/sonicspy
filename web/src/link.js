@@ -12,19 +12,34 @@
  * sees odd text — and carry a check byte, because ggwave can deliver garbled
  * bytes as if they were fine:
  *
- *   ~S1?tfrs.4c   hello: modes I speak, most preferred first
- *   ~S1!t.9a      accept: the mode we will use
+ *   ~S1?wtfrslu.4c   hello: modes I speak, most preferred first
+ *   ~S1!w.9a         accept: the mode we will use
+ *
+ * In a Wave mode every message is acknowledged. The receiver waits for the
+ * air to go quiet, then answers with a tiny Wave receipt that names the rate
+ * it wants next, chosen from the SNR it just measured. A sender that hears no
+ * receipt drops back to the default rate and sends fountain repair frames,
+ * a few rounds at most. Older builds never offer Wave, so never see this.
  */
 
-import { PROFILES, modulateFrames, crc16 } from './modem.js';
-import { framesForText, framesForBinary, FLAG_GZIP } from './protocol.js';
+import { MODES, modulateFrames, crc16, frameSeconds } from './modem.js';
+import { framesForText, framesForBinary, FLAG_ACK, FLAG_GZIP, onAir, repairFrames } from './protocol.js';
+import { chooseRate } from './wave.js';
 import { packFileContainer, maybeCompress } from './transfer.js';
 import { ggEncode, toGibberlink, randomSenderId, GgwaveUnreliableError, GG_MAX_BYTES } from './ggwave.js';
 
-export const MODE_LETTERS = { t: 'turbo', f: 'fast', r: 'robust', s: 'stealth' };
+export const MODE_LETTERS = { t: 'turbo', f: 'fast', r: 'robust', s: 'stealth', w: 'wave', l: 'wave-far', u: 'wave-ultra' };
+export const LINK_MODES = ['wave', 'turbo', 'fast', 'robust', 'stealth', 'wave-far', 'wave-ultra'];
 const LETTER_OF = Object.fromEntries(Object.entries(MODE_LETTERS).map(([k, v]) => [v, k]));
 const TAG = '~S1';
 const GG_PROTOCOL = 'gg-fast';
+const ARQ_ROUNDS = 3;
+
+function within(promise, ms) {
+  let timer;
+  const late = new Promise((resolve) => { timer = setTimeout(resolve, ms, false); });
+  return Promise.race([promise, late]).finally(() => clearTimeout(timer));
+}
 
 function check(body) {
   const bytes = new TextEncoder().encode(body);
@@ -74,9 +89,10 @@ export class Link {
   /*
    * play(samples) puts audio on air and resolves when it has finished.
    * onEvent receives { type: 'state', state, peer } | { type: 'message', from,
-   * via, text } | { type: 'file', from, via, file } | { type: 'sent', via, text?, file? }.
+   * via, text } | { type: 'file', from, via, file } | { type: 'sent', via, text?, file?,
+   * delivered? }, where delivered (Wave modes only) says whether a receipt came back.
    */
-  constructor({ fs, play, onEvent, modes = ['turbo', 'fast', 'robust', 'stealth'], id = randomSenderId() }) {
+  constructor({ fs, play, onEvent, modes = LINK_MODES, id = randomSenderId() }) {
     this.fs = fs;
     this.play = play;
     this.onEvent = onEvent ?? (() => {});
@@ -87,10 +103,14 @@ export class Link {
     this.sentIds = new Set();
     this.waiters = [];
     this.replies = 0;
+    this.rate = null;
+    this.receipts = new Map();
+    this.pendingAcks = new Map();
   }
 
   #setState(state, peer = this.peer) {
     this.state = state;
+    this.rate = null;
     this.peer = peer;
     this.onEvent({ type: 'state', state, peer });
     for (const wake of this.waiters.splice(0)) wake();
@@ -124,11 +144,12 @@ export class Link {
   async say(text) {
     if (!text.trim()) throw new Error('nothing to say');
     if (this.state === 'linked') {
-      const { id, frames } = framesForText(text, { chunkBytes: PROFILES[this.peer.mode].chunkBytes });
-      await this.#sonic(id, frames);
-    } else {
-      for (const piece of splitForGgwave(text, GG_MAX_BYTES - 3)) await this.#ggwaveText(piece);
+      const { id, frames } = framesForText(text, { chunkBytes: MODES[this.peer.mode].chunkBytes });
+      const delivered = await this.#sonic(id, frames);
+      this.onEvent({ type: 'sent', via: this.#via(), text, delivered });
+      return;
     }
+    for (const piece of splitForGgwave(text, GG_MAX_BYTES - 3)) await this.#ggwaveText(piece);
     this.onEvent({ type: 'sent', via: this.#via(), text });
   }
 
@@ -137,21 +158,60 @@ export class Link {
     const { data: body, gzipped } = await maybeCompress(data, true);
     const packed = packFileContainer({ name, mime, data: body });
     const { id, frames } = framesForBinary(packed, {
-      chunkBytes: PROFILES[this.peer.mode].chunkBytes,
+      chunkBytes: MODES[this.peer.mode].chunkBytes,
       flags: gzipped ? FLAG_GZIP : 0,
     });
-    await this.#sonic(id, frames);
-    this.onEvent({ type: 'sent', via: this.#via(), file: { name, mime, data } });
+    const delivered = await this.#sonic(id, frames);
+    this.onEvent({ type: 'sent', via: this.#via(), file: { name, mime, data }, delivered });
   }
 
   /* Feed every Translator event here. */
   async receive(event) {
     if (event.channel === 'ggwave' && event.kind === 'text') return this.#fromGgwave(event);
     if (event.channel !== 'tonedrop' || this.sentIds.has(event.id)) return undefined;
+    if (event.kind === 'ack') return this.#onReceipt(event.bytes);
     const from = this.peer?.id ?? null;
     if (event.kind === 'text') this.onEvent({ type: 'message', from, via: event.mode, text: event.text });
     if (event.kind === 'file') this.onEvent({ type: 'file', from, via: event.mode, file: event.file });
+    const wave = this.state === 'linked' && MODES[event.mode]?.phy === 'ofdm';
+    if (wave && ['text', 'file', 'again'].includes(event.kind)) this.#ackWhenQuiet(event);
     return undefined;
+  }
+
+  /* Half duplex: a receipt sent while the sender is still sending is lost
+   * under its own playback, so wait until a frame's length passes with no
+   * more of this message. A frame of a delivered message means the receipt
+   * was lost, and earns another. */
+  #ackWhenQuiet(event) {
+    const profile = MODES[event.mode];
+    clearTimeout(this.pendingAcks.get(event.id));
+    const quietMs = 300 + 1000 * (event.info?.seconds ?? frameSeconds(profile, profile.chunkBytes + 32));
+    this.pendingAcks.set(event.id, setTimeout(() => {
+      this.pendingAcks.delete(event.id);
+      this.#ack(event).catch(() => {});
+    }, quietMs));
+  }
+
+  async #ack({ id: msgId, mode, info }) {
+    const { modcod, mask } = info ? chooseRate(info) : { modcod: 0, mask: 0 };
+    const body = new Uint8Array(7);
+    const view = new DataView(body.buffer);
+    view.setUint32(0, msgId);
+    view.setUint8(4, modcod);
+    view.setUint16(5, mask);
+    const { id, frames } = framesForBinary(body, { flags: FLAG_ACK });
+    this.sentIds.add(id);
+    await this.play(modulateFrames(frames, { fs: this.fs, profile: MODES[mode], modcod: 0 }));
+  }
+
+  #onReceipt(bytes) {
+    if (bytes.length < 7) return;
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.length);
+    const wake = this.receipts.get(view.getUint32(0));
+    if (!wake) return;
+    const mask = view.getUint16(5);
+    this.rate = mask ? { modcod: view.getUint8(4), mask } : null;
+    wake(true);
   }
 
   async #fromGgwave({ text, sender }) {
@@ -179,12 +239,29 @@ export class Link {
     return this.state === 'linked' ? this.peer.mode : 'ggwave';
   }
 
+  /* → whether a receipt came back (Wave), undefined otherwise. */
   async #sonic(id, frames) {
     this.sentIds.add(id);
-    const profile = PROFILES[this.peer.mode];
-    const all = [];
-    for (let r = 0; r < profile.repeats; r++) all.push(...frames);
-    await this.play(modulateFrames(all, { fs: this.fs, profile }));
+    const profile = MODES[this.peer.mode];
+    if (profile.phy !== 'ofdm') {
+      await this.play(modulateFrames(onAir(frames, profile.repeats), { fs: this.fs, profile }));
+      return undefined;
+    }
+    const receipt = new Promise((resolve) => this.receipts.set(id, resolve));
+    const more = Math.ceil(frames.length / 2) + 1;
+    let batch = onAir(frames, profile.repeats, { fountain: true });
+    try {
+      for (let round = 0; round <= ARQ_ROUNDS; round++) {
+        await this.play(modulateFrames(batch, { fs: this.fs, profile, ...this.rate }));
+        const quiet = frameSeconds(profile, Math.max(...batch.map((f) => f.length)));
+        if (await within(receipt, 2500 + 1000 * (quiet + 2 * frameSeconds(profile, 64)))) return true;
+        this.rate = null;
+        batch = repairFrames(frames, more, round * more);
+      }
+      return false;
+    } finally {
+      this.receipts.delete(id);
+    }
   }
 
   /* ggwave refuses messages it would garble. A control message takes a little

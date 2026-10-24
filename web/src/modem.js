@@ -22,6 +22,7 @@
  */
 
 import { rsEncode, rsDecode } from './rs.js';
+import { demodulateWaveAll, modulateWave, WAVE_PROFILES, WaveDemodulator, waveFrameSeconds } from './wave.js';
 
 export const SYNC_BYTES = [0xa5, 0xc3, 0x5a];
 
@@ -107,14 +108,27 @@ export const PROFILES = {
   },
 };
 
+/* Every mode on offer: the MFSK profiles above plus Tonedrop Wave's OFDM ones
+ * (wave.js). Those carry `phy: 'ofdm'`, and the entry points below hand them
+ * to wave.js, so callers treat every mode alike. */
+export const MODES = { ...WAVE_PROFILES, ...PROFILES };
+const isOfdm = (profile) => profile.phy === 'ofdm';
+
+/* Airtime of one frame of `frameBytes` (before any repeats). */
+export function frameSeconds(profile, frameBytes) {
+  profile = resolveProfile(profile);
+  if (isOfdm(profile)) return waveFrameSeconds(profile, frameBytes, profile.modcod);
+  return frameSymbols(profile, frameBytes) * profile.symbolSeconds;
+}
+
 /* Profiles are keyed by name in the CLI, the UI and the URL, so a bare name is
  * an easy thing to hand to the modem by mistake. Accept either, and fail with
  * something readable rather than a NaN-length buffer. */
 function resolveProfile(profile) {
   if (typeof profile !== 'string') return profile;
-  const found = PROFILES[profile];
+  const found = MODES[profile];
   if (!found) {
-    throw new Error(`unknown profile "${profile}" - try: ${Object.keys(PROFILES).join(', ')}`);
+    throw new Error(`unknown profile "${profile}" - try: ${Object.keys(MODES).join(', ')}`);
   }
   return found;
 }
@@ -251,6 +265,7 @@ function goertzelPower(x, offset, N, freq, fs) {
 export function modulateFrames(frames, opts) {
   const fs = opts.fs;
   const profile = resolveProfile(opts.profile);
+  if (isOfdm(profile)) return modulateWave(frames, { ...opts, profile });
   const bps = bitsPerSymbol(profile);
   const N = Math.max(8, Math.round(fs * profile.symbolSeconds));
   const gapSamples = Math.round(N * (opts.gapSymbols ?? GAP_SYMBOLS));
@@ -310,6 +325,7 @@ export function modulateFrame(frame, opts) {
  * read the fixed prefix, and `onFrame` receives raw bytes. */
 export class Demodulator {
   constructor(opts) {
+    if (isOfdm(resolveProfile(opts.profile))) return new WaveDemodulator(opts);
     this.fs = opts.fs;
     this.profile = resolveProfile(opts.profile);
     this.bps = bitsPerSymbol(this.profile);
@@ -593,6 +609,10 @@ export function crc16(bytes, start, end) {
 /* Convenience for tests, the CLI and the in-page self-test: feed a whole
  * recording in one call and collect the frames it contains. */
 export function demodulateAll(samples, opts) {
+  if (isOfdm(resolveProfile(opts.profile))) {
+    const { frames, stats } = demodulateWaveAll(samples, opts);
+    return { frames, stats };
+  }
   const frames = [];
   const dem = new Demodulator({
     fs: opts.fs,

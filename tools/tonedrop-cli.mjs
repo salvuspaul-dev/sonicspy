@@ -18,14 +18,15 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 
 import {
-  PROFILES,
+  MODES,
   modulateFrames,
   demodulateAll,
   bitsPerSymbol,
   toneCount,
-  frameSymbols,
+  frameSeconds,
   DEFAULT_SQUELCH,
 } from '../web/src/modem.js';
+import { layout } from '../web/src/wave.js';
 import {
   framesForText,
   framesForBinary,
@@ -34,6 +35,7 @@ import {
   fromHex,
   FLAG_BINARY,
   FLAG_GZIP,
+  onAir,
 } from '../web/src/protocol.js';
 import {
   packFileContainer,
@@ -73,11 +75,15 @@ function parseArgs(argv) {
 
 function resolveProfile(name) {
   const key = name || 'robust';
-  const profile = PROFILES[key];
+  const profile = MODES[key];
   if (!profile) {
-    throw new Error(`unknown profile "${key}" — try: ${Object.keys(PROFILES).join(', ')}`);
+    throw new Error(`unknown profile "${key}" — try: ${Object.keys(MODES).join(', ')}`);
   }
   return profile;
+}
+
+function carriers(profile) {
+  return profile.phy === 'ofdm' ? `${layout(profile).bins.length} OFDM carriers` : `${toneCount(profile)} tones`;
 }
 
 function expectedFrameBytes(prefix, len) {
@@ -118,14 +124,13 @@ async function encode(args) {
     throw new Error('encode needs one of --text, --file or --hex');
   }
 
-  const repeated = [];
-  for (let r = 0; r < repeats; r++) repeated.push(...frames);
+  const repeated = onAir(frames, repeats, { fountain: profile.phy === 'ofdm' });
   const samples = modulateFrames(repeated, { fs, profile });
   await writeFile(out, toWav(samples, fs));
 
-  const seconds = repeated.reduce((n, f) => n + frameSymbols(profile, f.length), 0) * profile.symbolSeconds;
+  const seconds = repeated.reduce((n, f) => n + frameSeconds(profile, f.length), 0);
 
-  console.log(`profile   ${profile.label} (${toneCount(profile)} tones, ${(payloadBytesPerSecond(profile)).toFixed(0)} B/s)`);
+  console.log(`profile   ${profile.label} (${carriers(profile)}, ${(payloadBytesPerSecond(profile)).toFixed(0)} B/s)`);
   console.log(`payload   ${summary}`);
   console.log(`frames    ${frames.length} × ${repeats} repeats`);
   console.log(`on air    ${formatDuration(seconds)}`);
@@ -139,7 +144,7 @@ async function decode(args) {
   const raw = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
   const { samples, sampleRate } = fromWav(raw);
 
-  const candidates = args.profile ? [args.profile] : Object.keys(PROFILES);
+  const candidates = args.profile ? [args.profile] : Object.keys(MODES);
   const results = [];
 
   for (const name of candidates) {
@@ -288,7 +293,7 @@ function selftest(args) {
     results.push(check(noisy, `${snr} dB signal to noise`));
   }
 
-  console.log(`profile   "${args.profile || 'robust'}" · ${toneCount(profile)} tones · ${formatDuration((Date.now() - started) / 1000)} elapsed`);
+  console.log(`profile   "${args.profile || 'robust'}" · ${carriers(profile)} · ${formatDuration((Date.now() - started) / 1000)} elapsed`);
   if (results.some((r) => !r)) process.exitCode = 1;
 }
 
@@ -330,11 +335,12 @@ async function translate(args) {
 }
 
 function profiles() {
-  for (const [name, profile] of Object.entries(PROFILES)) {
+  for (const [name, profile] of Object.entries(MODES)) {
     const rate = payloadBytesPerSecond(profile);
     const { seconds } = estimateTransfer({ bytes: 1024, profile });
+    const symbols = profile.phy === 'ofdm' ? 'adaptive DPSK' : `${bitsPerSymbol(profile)} bits/symbol`;
     console.log(
-      `${name.padEnd(8)} ${toneCount(profile)} tones  ${bitsPerSymbol(profile)} bits/symbol  ` +
+      `${name.padEnd(10)} ${carriers(profile)}  ${symbols}  ` +
         `${rate.toFixed(0)} B/s  1 KB ≈ ${formatDuration(seconds)}`
     );
   }
@@ -371,7 +377,7 @@ async function main() {
           'tonedrop — data over sound',
           '',
           'usage:',
-          '  encode --text "hello" --out hello.wav [--profile robust|fast|turbo|stealth] [--repeats 2]',
+          '  encode --text "hello" --out hello.wav [--profile wave|wave-far|wave-ultra|robust|fast|turbo|stealth] [--repeats 2]',
           '  encode --file ./report.json --out report.wav [--profile turbo]',
           '  encode --hex a5c35a --out payload.wav',
           '  decode --in recording.wav [--out-dir ./received] [--profile fast]',

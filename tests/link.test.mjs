@@ -115,7 +115,19 @@ onAir('a lost reply is recovered: connect says hello again', { drop: (party, n) 
   assert.equal(await a.link.connect({ timeoutMs: 4000 }), 'linked');
   await air.settle();
   assert.equal(a.events.filter((e) => e.type === 'state' && e.state === 'calling').length, 2);
-  assert.deepEqual(a.link.peer, { id: b.link.id, mode: 'turbo' });
+  assert.deepEqual(a.link.peer, { id: b.link.id, mode: 'wave' });
+});
+
+onAir('a peer that only offers the MFSK modes, as older builds do, still links in turbo', {}, async (air) => {
+  const a = await air.party({ modes: ['turbo', 'fast', 'robust', 'stealth'] });
+  const b = await air.party();
+  assert.equal(await a.link.connect(PATIENT), 'linked');
+  await air.settle();
+  assert.equal(b.link.peer.mode, 'turbo');
+  await b.link.say('plain old turbo');
+  await air.settle();
+  assert.deepEqual(messages(a).map((m) => `${m.via}:${m.text}`), ['turbo:plain old turbo']);
+  assert.equal(b.events.find((e) => e.type === 'sent').delivered, undefined);
 });
 
 onAir('once linked, long messages and files cross in the agreed mode, and nobody hears their own echo', {}, async (air) => {
@@ -123,7 +135,7 @@ onAir('once linked, long messages and files cross in the agreed mode, and nobody
   const b = await air.party();
   await a.link.connect(PATIENT);
   await air.settle();
-  assert.equal(a.link.peer.mode, 'turbo');
+  assert.equal(a.link.peer.mode, 'wave');
 
   const long = 'The quick brown fox jumps over the lazy dog. '.repeat(12).trim();
   await a.link.say(long);
@@ -133,12 +145,41 @@ onAir('once linked, long messages and files cross in the agreed mode, and nobody
 
   const toB = messages(b);
   assert.equal(toB.length, 1);
-  assert.deepEqual({ ...toB[0] }, { type: 'message', from: a.link.id, via: 'turbo', text: long });
+  assert.deepEqual({ ...toB[0] }, { type: 'message', from: a.link.id, via: 'wave', text: long });
   const toA = messages(a);
   assert.equal(toA.length, 1, 'a heard only the file, not its own message');
   assert.equal(toA[0].type, 'file');
   assert.equal(toA[0].file.name, 'plan.json');
   assert.deepEqual([...toA[0].file.data], [...doc]);
+  for (const p of [a, b]) assert.deepEqual(p.events.filter((e) => e.type === 'sent').map((e) => e.delivered), [true]);
+  /* The receipt asks for the fastest rate this clean air allows. */
+  assert.equal(a.link.rate.modcod, 5);
+});
+
+onAir('a Wave message lost on air is resent as fountain repair frames until a receipt comes back', {
+  drop: (party, n) => party === 0 && n === 1,
+}, async (air) => {
+  const a = await air.party();
+  const b = await air.party();
+  await a.link.connect(PATIENT);
+  await air.settle();
+  await a.link.say('second time lucky');
+  await air.settle();
+  assert.deepEqual(messages(b).map((m) => m.text), ['second time lucky']);
+  assert.equal(a.events.find((e) => e.type === 'sent').delivered, true);
+});
+
+onAir('a lost receipt is sent again when repair frames of a delivered message arrive', {
+  drop: (party, n) => party === 1 && n === 1,
+}, async (air) => {
+  const a = await air.party();
+  const b = await air.party();
+  await a.link.connect(PATIENT);
+  await air.settle();
+  await a.link.say('did you get that?');
+  await air.settle();
+  assert.deepEqual(messages(b).map((m) => m.text), ['did you get that?']);
+  assert.equal(a.events.find((e) => e.type === 'sent').delivered, true);
 });
 
 onAir('agents that put stealth first link in stealth and talk under the music band', {}, async (air) => {
