@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 
 import { chooseRate, demodulateWaveAll, fft, layout, MODCODS, modulateWave, Resampler, WaveDemodulator } from '../web/src/wave.js';
 import { framesForMessage } from '../web/src/protocol.js';
-import { channel, rng, roomImpulse } from '../tools/channel.mjs';
+import { biquad, channel, rms, rng, roomImpulse } from '../tools/channel.mjs';
 
 const same = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
 const message = (n, seed = 1) => {
@@ -220,6 +220,24 @@ test('wave-ultra keeps its energy out of the audible band', () => {
   }
   const db = 10 * Math.log10(audible / total);
   assert.ok(db < -40, `audible share ${db.toFixed(1)} dB`);
+});
+
+/* The music carrier plays a song and the data from one speaker. A stand-in
+ * song twice as loud as the data: chords, plus cymbal-like noise whose top end
+ * falls away the way recorded music does above 10 kHz. */
+test('wave-ultra rides under a song louder than itself', () => {
+  const frames = framesOf(1024, 256, 9);
+  const data = modulateWave(frames, { profile: 'wave-ultra' });
+  const rand = rng(21);
+  const notes = Array.from({ length: 24 }, () => ({ f: 80 + rand() * 5000, ph: rand() * 2 * Math.PI, a: 0.3 + rand() * 0.7 }));
+  let hiss = Float32Array.from(data, () => rand() - 0.5);
+  for (let i = 0; i < 4; i++) hiss = biquad(hiss, 'lowpass', 10000);
+  const song = Float32Array.from(data, (_, n) => notes.reduce((s, p) => s + p.a * Math.sin((2 * Math.PI * p.f * n) / 48000 + p.ph), 0));
+  const songGain = (2 * rms(data)) / rms(song);
+  const hissGain = (0.3 * 2 * rms(data)) / rms(hiss);
+  const mix = Float32Array.from(data, (v, n) => v + songGain * song[n] + hissGain * hiss[n]);
+  const r = demodulateWaveAll(channel(mix, ROOMS.desk), { profile: 'wave-ultra' });
+  assert.equal(delivered(r.frames, frames), frames.length, `stats ${JSON.stringify(r.stats)}`);
 });
 
 test('chooseRate climbs with SNR and masks dead carriers when that pays', () => {

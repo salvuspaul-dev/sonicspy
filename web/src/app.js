@@ -290,8 +290,8 @@ async function transmitOnce({ frames, repeats }, pass = 0) {
 
   const samples = modulateFrames(all, { fs, profile: profile() });
   setStatus($('send-status'), `On air: ${samples.length} samples at ${fs} Hz…`, '');
-  /* Dipping the song would announce a stealth transmission to every listener. */
-  const wantsDuck = $('duck').checked && audio.musicSource && state.profile !== 'stealth';
+  /* Dipping the song would announce an inaudible transmission to every listener. */
+  const wantsDuck = $('duck').checked && audio.musicSource && !['stealth', 'wave-ultra'].includes(state.profile);
   if (wantsDuck) audio.duck(true);
   await audio.playSamples(samples, { volume: parseFloat($('data-volume').value) });
   if (wantsDuck) audio.duck(false);
