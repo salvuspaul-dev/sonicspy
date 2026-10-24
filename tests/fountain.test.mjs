@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { coefficients, Solver, unit } from '../web/src/fountain.js';
-import { FLAG_BINARY, framesForBinary, onAir, Reassembler, repairFrames } from '../web/src/protocol.js';
+import { buildFrame, FLAG_BINARY, FLAG_FOUNTAIN, framesForBinary, onAir, Reassembler, repairFrames } from '../web/src/protocol.js';
 import { rng } from '../tools/channel.mjs';
 
 const bytes = (n, seed) => {
@@ -69,4 +69,15 @@ test('plain repeats are unchanged, and a repair frame without the flag is reject
   const [repair] = repairFrames(frames, 1);
   repair[4] &= ~0x04;
   assert.equal(new Reassembler().accept(repair), 'stale');
+});
+
+test('past the chunk count the solver can finish, repairs are plain chunks and forged ones are refused', () => {
+  const data = bytes(1100 * 64, 5);
+  const { frames } = framesForBinary(data);
+  assert.ok(frames.length > 1024);
+  const resent = repairFrames(frames, 3, 1);
+  assert.deepEqual(resent, frames.slice(1, 4), 'every receiver understands a resent chunk');
+  /* Anyone in earshot can send a repair frame claiming 65535 chunks. */
+  const forged = buildFrame({ flags: FLAG_FOUNTAIN, msgId: 9, seq: 65000, chunkIndex: 65000, chunkTotal: 64000, payload: new Uint8Array(68) });
+  assert.equal(new Reassembler().accept(forged), 'stale');
 });

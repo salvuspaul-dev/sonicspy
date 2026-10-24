@@ -156,6 +156,26 @@ onAir('once linked, long messages and files cross in the agreed mode, and nobody
   assert.equal(a.link.rate.modcod, 5);
 });
 
+onAir('a forged receipt cannot set a rate this build has no modulator for', {
+  drop: (party, n) => party === 1 && n >= 1,
+}, async (air) => {
+  const a = await air.party();
+  const b = await air.party();
+  await a.link.connect(PATIENT);
+  await air.settle();
+  const said = a.link.say('who answered?');
+  /* Anyone who heard the message id can answer for it. */
+  const forged = new Uint8Array(7);
+  const view = new DataView(forged.buffer);
+  view.setUint32(0, [...a.link.sentIds].at(-1));
+  view.setUint8(4, 200);
+  view.setUint16(5, 0xffff);
+  await a.link.receive({ channel: 'tonedrop', kind: 'ack', id: 1, bytes: forged });
+  await said;
+  assert.equal(a.link.rate, null);
+  assert.equal(b.link.peer.mode, 'wave');
+});
+
 onAir('a Wave message lost on air is resent as fountain repair frames until a receipt comes back', {
   drop: (party, n) => party === 0 && n === 1,
 }, async (air) => {

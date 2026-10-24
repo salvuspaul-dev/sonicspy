@@ -116,10 +116,16 @@ export function framesForMessage({ id = randomId(), bytes, flags = 0, chunkBytes
   return { id, frames, chunkTotal: total };
 }
 
+/* The receiver's solver is dense, so a message of more chunks than this is
+ * repaired by resending its chunks instead, and repair frames claiming more are
+ * refused: anyone in earshot could otherwise make it grind on 65535 unknowns. */
+export const MAX_FOUNTAIN_CHUNKS = 1024;
+
 /* `count` fountain repair frames for a message, numbered from `from` past
  * its chunks. Each carries the message length, then the XOR of the chunks
  * coefficients() picks, zero-padded to the first chunk's size. */
 export function repairFrames(frames, count, from = 0) {
+  if (frames.length > MAX_FOUNTAIN_CHUNKS) return Array.from({ length: count }, (_, r) => frames[(from + r) % frames.length]);
   const chunks = frames.map(parseFrame);
   const { msgId, flags, chunkTotal: K } = chunks[0];
   const size = chunks[0].payload.length;
@@ -209,7 +215,9 @@ export class Reassembler {
      * run past what actually arrived. Anyone in earshot can send one. */
     const repair = frame.chunkIndex >= frame.chunkTotal;
     if (frame.chunkTotal === 0) return 'stale';
-    if (repair && (!(frame.flags & FLAG_FOUNTAIN) || frame.payload.length < 4)) return 'stale';
+    if (repair && (!(frame.flags & FLAG_FOUNTAIN) || frame.payload.length < 4 || frame.chunkTotal > MAX_FOUNTAIN_CHUNKS)) {
+      return 'stale';
+    }
 
     let entry = this.messages.get(frame.msgId);
     if (!entry) {

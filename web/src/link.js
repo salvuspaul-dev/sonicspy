@@ -24,7 +24,7 @@
 
 import { MODES, modulateFrames, crc16, frameSeconds } from './modem.js';
 import { framesForText, framesForBinary, FLAG_ACK, FLAG_GZIP, onAir, repairFrames } from './protocol.js';
-import { chooseRate } from './wave.js';
+import { chooseRate, layout, MODCODS } from './wave.js';
 import { packFileContainer, maybeCompress } from './transfer.js';
 import { ggEncode, toGibberlink, randomSenderId, GgwaveUnreliableError, GG_MAX_BYTES } from './ggwave.js';
 
@@ -207,11 +207,15 @@ export class Link {
   #onReceipt(bytes) {
     if (bytes.length < 7) return;
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.length);
-    const wake = this.receipts.get(view.getUint32(0));
-    if (!wake) return;
+    const waiting = this.receipts.get(view.getUint32(0));
+    if (!waiting) return;
+    const modcod = view.getUint8(4);
     const mask = view.getUint16(5);
-    this.rate = mask ? { modcod: view.getUint8(4), mask } : null;
-    wake(true);
+    /* Anyone who heard the message id can answer for it, and the rate sticks
+     * for later sends, so one this build cannot send would break all of them. */
+    const usable = mask && mask < 1 << layout(waiting.profile).groups && modcod < MODCODS.length;
+    this.rate = usable ? { modcod, mask } : null;
+    waiting.wake(true);
   }
 
   async #fromGgwave({ text, sender }) {
@@ -247,7 +251,7 @@ export class Link {
       await this.play(modulateFrames(onAir(frames, profile.repeats), { fs: this.fs, profile }));
       return undefined;
     }
-    const receipt = new Promise((resolve) => this.receipts.set(id, resolve));
+    const receipt = new Promise((resolve) => this.receipts.set(id, { wake: resolve, profile }));
     const more = Math.ceil(frames.length / 2) + 1;
     let batch = onAir(frames, profile.repeats, { fountain: true });
     try {
