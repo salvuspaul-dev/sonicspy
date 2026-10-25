@@ -13,6 +13,7 @@ import assert from 'node:assert/strict';
 
 import {
   PROFILES,
+  Demodulator,
   modulateFrames,
   demodulateAll,
   symbolsFromBytes,
@@ -21,6 +22,7 @@ import {
   crc16,
   DEFAULT_SQUELCH,
   SQUELCH_MIN,
+  toneFreq,
 } from '../web/src/modem.js';
 import {
   buildFrame,
@@ -299,20 +301,117 @@ test('at the faintest squelch the app offers, noise and music never become frame
   }
 });
 
+/* A room is loudest low down: fans, traffic and voices put far more energy near
+ * the 1.2 kHz preamble tone than at 3-5 kHz. On the phone, a quiet room passed
+ * for a preamble several times a second once the squelch came down, and every
+ * false start paid for a full timing sweep: enough to starve the other modes. */
+test('quiet room rumble at the default squelch raises no preamble candidates', () => {
+  const rand = mulberry32(5);
+  let y = 0;
+  const room = Float32Array.from({ length: FS * 6 }, () => (y = 0.97 * y + (rand() * 2 - 1) * 0.001));
+  for (const [name, profile] of Object.entries(PROFILES)) {
+    let candidates = 0;
+    const dem = new Demodulator({
+      fs: FS,
+      profile,
+      squelch: DEFAULT_SQUELCH,
+      expectedFrameBytes,
+      onPreamble: () => candidates++,
+    });
+    dem.push(room);
+    assert.equal(candidates, 0, `${name} took room noise for a preamble ${candidates} times`);
+  }
+});
+
 /* Measured on a real phone (RedMagic, Android 16) half a metre from laptop
  * speakers at two-thirds volume: the 7 kHz preamble tone arrived near -46 dBFS
  * with the room some 35 dB below it. A fixed gate of 0.02 (-34 dBFS) threw that
  * clean frame away, so the default must sit far lower and lean on the
- * noise-relative test instead. */
+ * noise-relative test instead. Stealth is fainter still: the same phone hearing
+ * its own speaker at under a third of full volume got its 17-18.6 kHz tones near
+ * 0.0001 of full scale (-80 dBFS), and they still decoded once let through. */
 test('a clean but faint frame, as a phone mic hears a laptop speaker, decodes at the default squelch', () => {
   for (const [name, profile] of Object.entries(PROFILES)) {
     const { frame } = makeTestFrame(`faint ${name}`);
     const audio = modulateFrames([frame], { fs: FS, profile });
     let peak = 0;
     for (const s of audio) peak = Math.max(peak, Math.abs(s));
-    const faint = addNoise(audio.map((s) => (s / peak) * 0.005), 30, 9);
+    const faint = addNoise(audio.map((s) => (s / peak) * 0.0001), 30, 9);
     const { frames } = decodeOnce(faint, profile, DEFAULT_SQUELCH);
     assert.equal(frames.length, 1, `${name}: faint frame was gated out`);
+    assert.deepEqual([...frames[0]], [...frame]);
+  }
+});
+
+/* Recorded on a RedMagic phone, the WebView capture lost a few dozen samples at
+ * a time partway through Robust frames, over 700 in one frame, while the pitch
+ * stayed exact. A timing held from the preamble lost a third of those frames. */
+test('a capture that drops samples mid-frame still decodes', () => {
+  for (const [name, profile] of Object.entries(PROFILES)) {
+    const { frame } = makeTestFrame(`samples go missing under ${name}, and the timing has to follow them`);
+    const audio = modulateFrames([frame], { fs: FS, profile });
+    const dataStart = 16 * 512;
+    const kept = [];
+    let from = 0;
+    for (let k = 1; k <= 8; k++) {
+      const cut = dataStart + Math.round(((audio.length - dataStart) * k) / 9);
+      kept.push(audio.subarray(from, cut));
+      from = cut + 96;
+    }
+    kept.push(audio.subarray(from));
+    const slipped = new Float32Array(kept.reduce((n, part) => n + part.length, 0));
+    let at = 0;
+    for (const part of kept) {
+      slipped.set(part, at);
+      at += part.length;
+    }
+    const { frames } = decodeOnce(addNoise(slipped, 20, 3), profile, DEFAULT_SQUELCH);
+    assert.equal(frames.length, 1, `${name}: lost the frame after 768 dropped samples`);
+    assert.deepEqual([...frames[0]], [...frame]);
+  }
+});
+
+/* Sine partials between lo and hi Hz with `amp` amplitude each, mixed in. */
+function addPartials(samples, count, lo, hi, amp, seed) {
+  const rand = mulberry32(seed);
+  const out = Float32Array.from(samples);
+  for (let i = 0; i < count; i++) {
+    const w = (2 * Math.PI * (lo + rand() * (hi - lo))) / FS;
+    const phase = rand() * 2 * Math.PI;
+    for (let n = 0; n < out.length; n++) out[n] += amp * Math.sin(w * n + phase);
+  }
+  return out;
+}
+
+/* A phone playing to its own microphone hears 1.2-2 kHz energy whenever its
+ * speaker sounds a 5-6 kHz tone, so Turbo's lowest tones crowd its symbols.
+ * Here three low tones hum throughout, each a little louder than the data. */
+test('[turbo] reads its symbols past low tones humming louder than the data', () => {
+  const profile = PROFILES.turbo;
+  let heard = 0;
+  for (let seed = 1; seed <= 8; seed++) {
+    const { frame } = makeTestFrame(`hum ${seed}`, 0x1234 + seed);
+    let audio = addNoise(modulateFrames([frame], { fs: FS, profile }), 40, seed);
+    for (const tone of [3, 5, 7]) {
+      const f = toneFreq(profile, tone);
+      audio = addPartials(audio, 1, f, f, 0.3, seed * 8 + tone);
+    }
+    const { frames } = decodeOnce(audio, profile, DEFAULT_SQUELCH);
+    if (frames.length === 1 && frames[0].every((b, i) => b === frame[i])) heard++;
+  }
+  assert.ok(heard >= 7, `only ${heard} of 8 frames heard past the hum`);
+});
+
+/* Headers carry many zero bytes, so tone 0 is sent far more often than the
+ * rest. Rumble across the low tones must not make those sends read as noise. */
+test('[turbo] a tone sent often still stands out of low-band rumble', () => {
+  const profile = PROFILES.turbo;
+  for (let seed = 1; seed <= 12; seed++) {
+    const { frame } = makeTestFrame(`rumble ${seed}`, 0x5678 + seed);
+    const audio = modulateFrames([frame], { fs: FS, profile });
+    const rumble = addPartials(addNoise(audio, 40, seed), 40, 1100, 2200, (0.28 * 0.9) / Math.sqrt(40), seed);
+    const { frames } = decodeOnce(rumble, profile, DEFAULT_SQUELCH);
+    assert.equal(frames.length, 1, `seed ${seed}: frame lost in the rumble`);
     assert.deepEqual([...frames[0]], [...frame]);
   }
 });

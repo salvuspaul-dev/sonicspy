@@ -47,15 +47,24 @@ export const GAP_SYMBOLS = 6;
 /* Squelch is an amplitude floor (fraction of full scale) for the preamble. Mic
  * gain differs too much between devices for a level to mean much, so the floor
  * sits low and PREAMBLE_MIN_SNR, which scales with the input, does the
- * rejecting: the preamble tones must stand this far above tones it never uses. */
-export const DEFAULT_SQUELCH = 0.002;
-export const SQUELCH_MIN = 0.001;
+ * rejecting: the preamble tones must stand this far above their neighbours. */
+export const DEFAULT_SQUELCH = 0.00005;
+export const SQUELCH_MIN = 0.00005;
 export const PREAMBLE_MIN_SNR = 4;
 
 /* How much of a tone's power when its set was last used is subtracted before
  * comparing candidates. Measured best over 2-4 sets; higher values start to
  * penalise a value that legitimately repeats. */
 const RISE_WEIGHT = 0.3;
+
+/* Fraction of a hop the symbol timing may move per symbol while tracking. */
+const TIMING_GAIN = 0.25;
+
+/* Weight of the whole band's level against a tone's own when judging how far
+ * that tone stands out. At 1 a phone lost Fast and Turbo frames to its own
+ * low-tone spray; below 4 a reverberant room's ringing lifts the floors of
+ * recently sent tones and Turbo loses half its frames there. */
+const BAND_WEIGHT = 4;
 
 export const PROFILES = {
   robust: {
@@ -246,13 +255,26 @@ export function symbolsForBytes(byteCount, bps) {
   return Math.ceil((byteCount * 8) / bps);
 }
 
+/* The window was once recomputed per sample, and that cosine was most of the
+ * cost of listening. */
+const hannTables = new Map();
+function hannTable(N) {
+  let table = hannTables.get(N);
+  if (!table) {
+    table = Float64Array.from({ length: N }, (_, n) => hann(n, N));
+    hannTables.set(N, table);
+  }
+  return table;
+}
+
 function goertzelPower(x, offset, N, freq, fs) {
   const w = (2 * Math.PI * freq) / fs;
   const coeff = 2 * Math.cos(w);
+  const win = hannTable(N);
   let s1 = 0;
   let s2 = 0;
   for (let n = 0; n < N; n++) {
-    const s0 = x[offset + n] * hann(n, N) + coeff * s1 - s2;
+    const s0 = x[offset + n] * win[n] + coeff * s1 - s2;
     s2 = s1;
     s1 = s0;
   }
@@ -347,8 +369,6 @@ export class Demodulator {
     this.freqs = [];
     for (let i = 0; i < toneCount(this.profile); i++) this.freqs.push(toneFreq(this.profile, i));
     this.maxBody = maxBodyBytes(this.profile);
-    /* Tones the preamble never sends, away from both ends: a noise reference. */
-    this.refTones = [Math.round(this.freqs.length / 3), Math.round((2 * this.freqs.length) / 3)];
 
     /* Tone powers are memoised on absolute sample offsets. Consecutive search
      * positions overlap by three quarters of a symbol, so this removes most of
@@ -433,13 +453,15 @@ export class Demodulator {
     const score = correct / PREAMBLE_SYMBOLS;
     if (score < PREAMBLE_MIN_SCORE) return score;
 
-    /* Only offsets that already look right pay for the reference tones. */
+    /* Only offsets that already look right pay for the reference tones. Each
+     * preamble tone is held against its own neighbour: room noise piles up at
+     * low frequencies, so a reference far up the band would let it through. */
     let wanted = 0;
     let reference = 0;
     for (let i = 0; i < PREAMBLE_SYMBOLS; i++) {
       const at = offset + i * this.N;
       wanted += this.#tonePower(at, i % 2 === 0 ? 0 : highTone);
-      reference += (this.#tonePower(at, this.refTones[0]) + this.#tonePower(at, this.refTones[1])) / 2;
+      reference += this.#tonePower(at, i % 2 === 0 ? 1 : highTone - 1);
     }
     return wanted >= PREAMBLE_MIN_SNR * reference ? score : 0;
   }
@@ -517,21 +539,63 @@ export class Demodulator {
   #readSymbols(offset, count) {
     const { m, sets } = this.profile;
     const syms = new Uint8Array(count);
+    const scores = [];
+    const levels = new Map();
+    /* Android's capture path drops a few dozen samples now and then, up to several
+     * hundred over one Robust frame, so a timing fixed at the preamble walks off
+     * the symbols. Each symbol's tone is weighed a hop early and a hop late, and
+     * the timing leans toward the stronger side. */
+    let drift = 0;
     for (let s = 0; s < count; s++) {
-      const at = offset + s * this.N;
+      const at = offset + s * this.N + Math.round(drift);
       if (at + this.N > this.len) return null;
       const before = at - sets * this.N;
-      let bestScore = -Infinity;
-      let bestValue = 0;
+      const row = new Float64Array(m);
+      const powers = new Float64Array(m);
       for (let v = 0; v < m; v++) {
         const tone = dataTone(this.profile, s, v);
-        const score = this.#tonePower(at, tone) - RISE_WEIGHT * this.#tonePower(before, tone);
-        if (score > bestScore) {
-          bestScore = score;
-          bestValue = v;
+        powers[v] = this.#tonePower(at, tone);
+        row[v] = powers[v] - RISE_WEIGHT * this.#tonePower(before, tone);
+        if (row[v] > row[syms[s]]) syms[s] = v;
+      }
+      for (let v = 0; v < m; v++) {
+        if (v === syms[s]) continue;
+        const tone = dataTone(this.profile, s, v);
+        if (!levels.has(tone)) levels.set(tone, []);
+        levels.get(tone).push(powers[v]);
+      }
+      scores.push(row);
+      if (at + this.hop + this.N > this.len) continue;
+      const tone = dataTone(this.profile, s, syms[s]);
+      const early = this.#tonePower(at - this.hop, tone);
+      const late = this.#tonePower(at + this.hop, tone);
+      if (early + late > 0) drift += (TIMING_GAIN * this.hop * (late - early)) / (late + early);
+    }
+
+    /* A phone hearing its own speaker gets 1.2-2 kHz energy whenever a 5-6 kHz
+     * tone plays, so the lowest Turbo tones won symbols they were never sent in
+     * and lost a third of its frames. Each tone is weighed against its typical
+     * level over the frame, plus the band's, so a tone that is quiet throughout
+     * is not inflated. Typical is the median over the symbols the tone did not
+     * win: headers send value 0 so often that its own sends would lift its
+     * median and sink it under noise. */
+    const floor = new Map();
+    let band = 0;
+    for (const [tone, powers] of levels) {
+      powers.sort((a, b) => a - b);
+      floor.set(tone, powers[powers.length >> 1]);
+      band += powers[powers.length >> 1] / levels.size;
+    }
+    if (!(band > 0)) return syms;
+    for (let s = 0; s < count; s++) {
+      let best = -Infinity;
+      for (let v = 0; v < m; v++) {
+        const score = scores[s][v] / ((floor.get(dataTone(this.profile, s, v)) ?? 0) + BAND_WEIGHT * band);
+        if (score > best) {
+          best = score;
+          syms[s] = v;
         }
       }
-      syms[s] = bestValue;
     }
     return syms;
   }
