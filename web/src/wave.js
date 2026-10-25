@@ -114,6 +114,16 @@ const KERNEL_TABLE = 256;
  * 128-sample block now and then, which moves the rest of a frame; the
  * receiver follows jumps up to this size between two symbols. */
 const SLIP_RANGE = 384;
+const QUANTUM = 128;
+/* Rounds of mends tried on a frame that fails, each over the symbols that fit
+ * worst, and the mends of a round carried into the next. */
+const MEND_ROUNDS = 2;
+const MEND_BEAM = 2;
+/* A reference symbol spreads its power over every carrier, so even through a
+ * fading room its strongest twentieth hold about a fifth of it (at most 0.24
+ * measured). The steady tones of other modes that set off a false preamble
+ * hold far more (0.3 and up), and a header failing on them is not mended. */
+const MEND_PEAK_SHARE = 0.27;
 
 /* ---------- FFT ---------- */
 
@@ -591,13 +601,16 @@ function modulateOne(L, frame, modcod, mask) {
 }
 
 /* Modulate protocol frames into one Float32Array at `fs`. `amplitude` is the
- * peak level; OFDM's peak-to-average ratio makes 0.5 about as loud as an MFSK
- * tone at modem.js's 0.28. */
+ * peak level. OFDM's peak-to-average ratio makes 0.5 about as loud as an MFSK
+ * tone at modem.js's 0.28, but at that level a phone hearing its own speaker
+ * missed 5 of 8 Wave frames once the room got 8 dB noisier, and none at 0.9;
+ * Wave Ultra needs it most, as phone speakers and mics are weakest up there.
+ * The headroom left covers a resampled peak. */
 export function modulateWave(frames, opts) {
   const L = layout(opts.profile);
   const modcod = opts.modcod ?? L.profile.modcod;
   const mask = opts.mask ?? fullMask(L);
-  const amp = opts.amplitude ?? 0.5;
+  const amp = opts.amplitude ?? 0.9;
   const parts = frames.map((f) => modulateOne(L, f, modcod, mask));
   let peak = 0;
   for (const p of parts) for (const v of p) peak = Math.max(peak, Math.abs(v));
@@ -655,6 +668,13 @@ function fitLevel(history, bits) {
 function fitsPoorly(level, n, f) {
   if (!level) return f.pilot < 0.3;
   return (f.data < 0.5 * level.data && f.data < level.data - 3 / Math.sqrt(2 * n)) || f.pilot < 0.5 * level.pilot;
+}
+
+/* Share of a symbol's power in its strongest twentieth of carriers. */
+function peakShare(Y) {
+  const P = Array.from(Y.re, (v, j) => v * v + Y.im[j] * Y.im[j]).sort((a, b) => b - a);
+  const total = P.reduce((a, b) => a + b, 0);
+  return total > 0 ? P.slice(0, Math.max(1, Math.round(P.length / 20))).reduce((a, b) => a + b, 0) / total : 1;
 }
 
 /* Weighted least-squares terms of one step's turn, alpha = num / den. */
@@ -862,11 +882,21 @@ export class WaveDemodulator {
   }
 
   #symbol(t0, s, shift) {
+    return this.#window(this.#symbolStart(t0, s) + shift, 0, this.L.N);
+  }
+
+  /* Spectrum of a symbol read in pieces [lo, hi), each e samples on from `start`. */
+  #pieced(start, pieces) {
+    const parts = pieces.map((c) => this.#window(start + c.e, c.lo, c.hi));
+    return parts.reduce((a, b) => ({ re: a.re.map((v, j) => v + b.re[j]), im: a.im.map((v, j) => v + b.im[j]) }));
+  }
+
+  /* Spectrum of a window starting at `start` that keeps only samples [lo, hi). */
+  #window(start, lo, hi) {
     const L = this.L;
-    const start = this.#symbolStart(t0, s) + shift;
     const re = new Float64Array(L.N);
     const im = new Float64Array(L.N);
-    for (let n = 0; n < L.N; n++) re[n] = this.buf[start + n];
+    for (let n = lo; n < hi; n++) re[n] = this.buf[start + n];
     fft(re, im);
     return { re: L.bins.map((k) => re[k]), im: L.bins.map((k) => im[k]) };
   }
@@ -931,6 +961,7 @@ export class WaveDemodulator {
       p.part[s] = { data: fit.data[0], pilot: fit.pilot[0], bits, n: carriers.length, early: !level };
       p.torn[s] = !skip && poor(fit);
       p.alone[s] = moved || skip || p.torn[s];
+      p.at[s] = p.shift;
       if (!p.alone[s]) {
         p.history.push({ data: fit.data[0], pilot: fit.pilot[0], bits });
         if (fit.pilot[0] >= 0.5 * (level ? level.pilot : 0.6)) {
@@ -945,10 +976,13 @@ export class WaveDemodulator {
   #tryFrame() {
     const L = this.L;
     const p = this.pending;
-    if (!p.Y) Object.assign(p, { Y: [], shift: 0, part: [], alone: [], torn: [], history: [], drift: { num: 0, den: 0 } });
+    if (!p.Y) Object.assign(p, { Y: [], shift: 0, at: [0], pieces: [], part: [], alone: [], torn: [], history: [], drift: { num: 0, den: 0 } });
     if (!p.header) {
       if (!this.#readSymbols(p, 1 + L.headerSymbols)) return false;
-      p.header = this.#decodeHeader(p) ?? this.#retryHeader(p);
+      p.header =
+        this.#decodeHeader(p) ??
+        this.#retryHeader(p) ??
+        (peakShare(p.Y[0]) < MEND_PEAK_SHARE ? this.#mendFrame(p, () => this.#decodeHeader(p)) : null);
       if (!p.header) {
         this.headerFailures++;
         return this.#skip(p.t0);
@@ -957,7 +991,7 @@ export class WaveDemodulator {
       p.active = activeData(L, p.header.mask);
     }
     if (!this.#readSymbols(p, 1 + L.headerSymbols + p.S)) return false;
-    const result = this.#decodeBody(p);
+    const result = this.#decodeBody(p) || this.#mendFrame(p, () => this.#decodeBody(p));
     if (!result) {
       this.crcFailures++;
       return this.#skip(p.t0);
@@ -1000,8 +1034,11 @@ export class WaveDemodulator {
         if (wide.data[e] + wide.pilot[e] > wide.data[best] + wide.pilot[best]) best = e;
       }
       if (best === SLIP_RANGE) continue;
-      const q = { ...p, Y: p.Y.slice(0, s), shift: p.shift + best - SLIP_RANGE, alone: p.alone.slice(), torn: p.torn.slice() };
-      for (let t = s; t <= H; t++) q.Y.push(this.#symbol(p.t0, t, q.shift));
+      const q = { ...p, Y: p.Y.slice(0, s), shift: p.shift + best - SLIP_RANGE, at: p.at.slice(), alone: p.alone.slice(), torn: p.torn.slice() };
+      for (let t = s; t <= H; t++) {
+        q.Y.push(this.#symbol(p.t0, t, q.shift));
+        q.at[t] = q.shift;
+      }
       q.alone[s] = true;
       q.torn[s] = true;
       const header = this.#decodeHeader(q);
@@ -1011,6 +1048,256 @@ export class WaveDemodulator {
       }
     }
     return null;
+  }
+
+  /* A header or body that fails to `decode` may hold slips inside symbols'
+   * windows: such a symbol fits no single offset. Mend the symbols beside the
+   * weakest steps; a mend that decodes is kept, and as one window can hold
+   * more than one slip, the best few are each carried into another round. */
+  #mendFrame(p, decode, rounds = MEND_ROUNDS) {
+    const last = p.Y.length - 1;
+    const fit = (t) => p.part[t].data + p.part[t].pilot;
+    const weak = [];
+    for (let t = 0; t <= last; t++) {
+      const near = [];
+      if (t > 0) near.push(fit(t));
+      if (t < last) near.push(fit(t + 1));
+      weak.push({ t, w: near.reduce((a, b) => a + b, 0) / near.length });
+    }
+    weak.sort((a, b) => a.w - b.w);
+    const offers = weak.slice(0, 3).map(({ t }) => this.#mend(p, t)).filter(Boolean);
+    offers.sort((a, b) => b.gain - a.gain);
+    const attempt = (m, next) => {
+      const kept = { Y: p.Y.slice(), at: p.at.slice(), pieces: p.pieces.slice(), part: p.part.slice(), alone: p.alone.slice(), torn: p.torn.slice(), shift: p.shift };
+      m.apply();
+      const result = next();
+      if (!result) Object.assign(p, kept);
+      return result;
+    };
+    for (const m of offers) {
+      const result = attempt(m, decode);
+      if (result) return result;
+    }
+    if (rounds > 1) {
+      for (const m of offers.slice(0, MEND_BEAM)) {
+        const result = attempt(m, () => this.#mendFrame(p, decode, rounds - 1));
+        if (result) return result;
+      }
+    }
+    return null;
+  }
+
+  /* Offers a mend of symbol t: one more cut in its window, after which the
+   * rest of that piece is read e samples on, and the symbols after it moved to
+   * where the next one fits best (a slip between two windows moves it alone).
+   * For each cut on a grid the part after slides across every e at one update
+   * per pilot bin per sample, and the pilots of the step into t (out of it, for
+   * the first symbol) pick a few candidates; read in full, the one that best
+   * fits both neighbouring steps, its cuts then settled, is offered if better
+   * than the symbol as read. */
+  #mend(p, t) {
+    const L = this.L;
+    const { N } = L;
+    const H = L.headerSymbols;
+    const last = p.Y.length - 1;
+    const alpha = p.drift.den > 0 ? p.drift.num / p.drift.den : 0;
+    const carriersAt = (u) => (u <= H ? L.allData : p.active);
+    const bitsAt = (u) => (u <= H ? 2 : MODCODS[p.header.modcod].bits);
+    const fitAt = (u, a, b, carriers = carriersAt(u)) => {
+      const f = coherence(L, a, b, alpha, carriers, [bitsAt(u)]);
+      return { data: f.data[0], pilot: f.pilot[0] };
+    };
+    const step = (u, a, b, carriers) => {
+      const f = fitAt(u, a, b, carriers);
+      return f.data + f.pilot;
+    };
+    const shifted = (u, e) =>
+      p.pieces[u] ? this.#pieced(this.#symbolStart(p.t0, u), p.pieces[u].map((c) => ({ ...c, e: c.e + e }))) : this.#symbol(p.t0, u, p.at[u] + e);
+    /* The step out of Y, with the next symbol read where it fits best. */
+    const follow = (Y) => {
+      if (t === last) return { e: 0, s: 0 };
+      let best = { e: 0, next: p.Y[t + 1], s: step(t + 1, Y, p.Y[t + 1]) };
+      const wide = coherence(L, Y, p.Y[t + 1], alpha, carriersAt(t + 1), [bitsAt(t + 1)], -SLIP_RANGE, SLIP_RANGE);
+      let top = SLIP_RANGE;
+      for (let i = 0; i < wide.data.length; i++) if (wide.data[i] + wide.pilot[i] > wide.data[top] + wide.pilot[top]) top = i;
+      if (top !== SLIP_RANGE) {
+        const next = shifted(t + 1, top - SLIP_RANGE);
+        const s = step(t + 1, Y, next);
+        if (s > best.s) best = { e: top - SLIP_RANGE, next, s };
+      }
+      return best;
+    };
+    const score = (Y) => (t > 0 ? step(t, p.Y[t - 1], Y) : 0) + follow(Y).s;
+    const start = this.#symbolStart(p.t0, t);
+    /* A symbol may have been moved by a slip inside it, and one mended for the
+     * header alone may have been mended wrongly. */
+    const fresh = [...new Set([p.at[Math.max(t - 1, 0)], p.at[t]])].map((e) => [{ lo: 0, hi: N, e }]);
+    const bases = p.pieces[t] ? [p.pieces[t], ...fresh] : fresh;
+    const cut = (base, i, tau, e) => base.flatMap((c, j) => (j === i ? [{ ...c, hi: tau }, { lo: tau, hi: c.hi, e: c.e + e }] : [c]));
+    const nextStart = t === 0 && last > 0 ? this.#symbolStart(p.t0, 1) + p.at[1] : -Infinity;
+    /* Pilot bins of the spectrum of samples [lo, hi) read from `from`, moved
+     * one sample on by each call of next(). */
+    const slider = (from, lo, hi) => {
+      const Y = this.#window(from, lo, hi);
+      const turns = L.pilots.map((j) => {
+        const a = (2 * Math.PI * L.bins[j]) / N;
+        return [Math.cos(a), Math.sin(a), Math.cos(a * lo), Math.sin(a * lo), Math.cos(a * hi), Math.sin(a * hi)];
+      });
+      const next = () => {
+        const out = this.buf[from + lo];
+        const into = this.buf[from + hi];
+        L.pilots.forEach((j, q) => {
+          const [c, s, cl, sl, ch, sh] = turns[q];
+          const r = Y.re[j] - out * cl + into * ch;
+          const i = Y.im[j] + out * sl - into * sh;
+          Y.re[j] = r * c - i * s;
+          Y.im[j] = r * s + i * c;
+        });
+        from++;
+      };
+      return { Y, next };
+    };
+
+    const cand = { re: new Float64Array(L.bins.length), im: new Float64Array(L.bins.length) };
+    const found = [];
+    bases.forEach((base, b) => {
+      /* Reads stay within the audio heard so far. */
+      const hiE = Math.min(SLIP_RANGE, this.len - 1 - N - Math.max(...base.map((c) => start + c.e), nextStart));
+      base.forEach((piece, i) => {
+        for (let tau = N >> 3; tau < N; tau += N >> 3) {
+          if (tau <= piece.lo || tau >= piece.hi) continue;
+          const pre = this.#pieced(start, cut(base, i, tau, 0).filter((c, j) => j !== i + 1));
+          const post = slider(start + piece.e - SLIP_RANGE, tau, piece.hi);
+          const next = nextStart > -Infinity ? slider(nextStart - SLIP_RANGE, 0, N) : null;
+          for (let e = -SLIP_RANGE; e <= hiE; e++) {
+            if (e !== 0) {
+              for (const j of L.pilots) {
+                cand.re[j] = pre.re[j] + post.Y.re[j];
+                cand.im[j] = pre.im[j] + post.Y.im[j];
+              }
+              found.push({ b, i, tau, e, s: t > 0 ? step(t, p.Y[t - 1], cand, []) : next ? step(1, cand, next.Y, []) : 0 });
+            }
+            post.next();
+            next?.next();
+          }
+        }
+      });
+    });
+    found.sort((a, b) => b.s - a.s);
+    const picks = [];
+    for (const f of found) {
+      if (picks.length === 12) break;
+      if (!picks.some((q) => q.b === f.b && q.i === f.i && q.tau === f.tau && Math.abs(q.e - f.e) <= 2)) picks.push(f);
+    }
+
+    const layouts = picks.map(({ b, i, tau, e }) => cut(bases[b], i, tau, e));
+    if (t > 0) for (const [{ e }] of fresh) layouts.push(...this.#quantumCuts(start, e, (Y) => step(t, p.Y[t - 1], Y, [])));
+
+    const asRead = score(p.Y[t]);
+    let best = { score: asRead };
+    for (const pieces of layouts) {
+      const Y = this.#pieced(start, pieces);
+      const s = score(Y);
+      if (s > best.score) best = { score: s, pieces, Y };
+    }
+    if (!best.Y) return null;
+    /* Settle every cut, the new one and those of earlier mends, on a finer grid. */
+    for (let j = 1; j < best.pieces.length; j++) {
+      const at = best.pieces[j].lo;
+      for (let tau = at - (N >> 3); tau <= at + (N >> 3); tau += N >> 6) {
+        if (tau === at || tau <= best.pieces[j - 1].lo || tau >= best.pieces[j].hi) continue;
+        const pieces = best.pieces.map((c, k) => (k === j - 1 ? { ...c, hi: tau } : k === j ? { ...c, lo: tau } : c));
+        const Y = this.#pieced(start, pieces);
+        const s = score(Y);
+        if (s > best.score) best = { score: s, pieces, Y };
+      }
+    }
+    return {
+      gain: best.score - asRead,
+      apply: () => {
+        const { e: moved, next } = follow(best.Y);
+        p.pieces[t] = best.pieces;
+        p.Y[t] = best.Y;
+        p.at[t] = best.pieces[best.pieces.length - 1].e;
+        for (let u = t + 1; u <= last && moved; u++) {
+          p.Y[u] = u === t + 1 ? next : shifted(u, moved);
+          p.at[u] += moved;
+          if (p.pieces[u]) p.pieces[u] = p.pieces[u].map((c) => ({ ...c, e: c.e + moved }));
+        }
+        /* Symbols not yet read follow the last one read. */
+        p.shift = t === last ? p.at[t] : p.shift + moved;
+        for (let u = Math.max(t, 1); u <= (moved ? last : Math.min(t + 1, last)); u++) p.part[u] = { ...p.part[u], ...fitAt(u, p.Y[u - 1], p.Y[u]) };
+        for (const u of [t, t + 1]) {
+          p.alone[u] = true;
+          p.torn[u] = false;
+        }
+      },
+    };
+  }
+
+  /* One window can hold two slips of whole blocks, which no single cut fits.
+   * Layouts of a symbol read from `start` + e with up to two cuts on a coarse
+   * grid, each part read up to two blocks back or one on, ranked by `rank` on
+   * the pilots alone (sums over the grid make each layout cheap): the best few. */
+  #quantumCuts(start, e, rank) {
+    const L = this.L;
+    const { N } = L;
+    const K = 32;
+    const G = N / K;
+    const moves = [0, -QUANTUM, -2 * QUANTUM, QUANTUM];
+    /* Pilot bins of samples [0, k G) read `move` on, for each k. */
+    const prefix = moves.map((move) =>
+      L.pilots.map((j) => {
+        const a = (-2 * Math.PI * L.bins[j]) / N;
+        const cr = Math.cos(a);
+        const ci = Math.sin(a);
+        const re = new Float64Array(K + 1);
+        const im = new Float64Array(K + 1);
+        let c = 1;
+        let s = 0;
+        let sr = 0;
+        let si = 0;
+        for (let n = 0; n < N; n++) {
+          const x = this.buf[start + e + move + n];
+          sr += x * c;
+          si += x * s;
+          const u = c * cr - s * ci;
+          s = c * ci + s * cr;
+          c = u;
+          if ((n + 1) % G === 0) {
+            re[(n + 1) / G] = sr;
+            im[(n + 1) / G] = si;
+          }
+        }
+        return { re, im };
+      }),
+    );
+    const Y = { re: new Float64Array(L.bins.length), im: new Float64Array(L.bins.length) };
+    const found = [];
+    for (let k1 = 1; k1 < K; k1++) {
+      for (let k2 = k1; k2 < K; k2++) {
+        for (let m1 = 1; m1 < moves.length; m1++) {
+          for (let m2 = 0; m2 < moves.length; m2++) {
+            /* One cut, or two with a move at each. */
+            if ((k2 === k1) !== (m2 === m1)) continue;
+            L.pilots.forEach((j, q) => {
+              const [a, b, c] = [prefix[0][q], prefix[m1][q], prefix[m2][q]];
+              Y.re[j] = a.re[k1] + b.re[k2] - b.re[k1] + c.re[K] - c.re[k2];
+              Y.im[j] = a.im[k1] + b.im[k2] - b.im[k1] + c.im[K] - c.im[k2];
+            });
+            found.push({ k1, k2, m1, m2, s: rank(Y) });
+          }
+        }
+      }
+    }
+    found.sort((a, b) => b.s - a.s);
+    return found.slice(0, 4).map(({ k1, k2, m1, m2 }) =>
+      [
+        { lo: 0, hi: k1 * G, e },
+        { lo: k1 * G, hi: k2 * G, e: e + moves[m1] },
+        { lo: k2 * G, hi: N, e: e + moves[m2] },
+      ].filter((c) => c.hi > c.lo),
+    );
   }
 
   #decodeBody(p) {

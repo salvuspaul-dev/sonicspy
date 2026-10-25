@@ -175,6 +175,25 @@ test('a short frame survives a block dropped near the end of its last symbol', (
   }
 });
 
+/* A drop inside a symbol's window leaves it fitting no single offset, and
+ * one window can hold two drops; header and body symbols alike. */
+test('a wave-far frame survives blocks dropped inside its header and body symbols', () => {
+  const L = layout('wave-far');
+  const frames = framesOf(19, 1024, 13);
+  const tx = channel(modulateWave(frames, { profile: 'wave-far', modcod: 1 }), { rir: [1], ppm: 0, gain: 0.5, noiseRms: 0.01, seed: 5 });
+  const lead = Math.round(0.25 * 48000);
+  for (const s of [1, 2]) {
+    for (const drops of [[3000], [7700], [3000, 7700], [1500, 5000]]) {
+      const cuts = drops.map((a) => lead + L.chirp.length + s * L.hop + L.cp + a);
+      const keep = [...cuts, tx.length].map((c, i) => tx.subarray(i ? cuts[i - 1] + 128 : 0, c));
+      const rx = new Float32Array(keep.reduce((n, k) => n + k.length, 0));
+      keep.reduce((o, k) => (rx.set(k, o), o + k.length), 0);
+      const r = demodulateWaveAll(rx, { profile: 'wave-far' });
+      assert.equal(delivered(r.frames, frames), frames.length, `symbol ${s} drops ${drops}: ${JSON.stringify(r.stats)}`);
+    }
+  }
+});
+
 test('wave-far gets through a reverberant hall that defeats short symbols', () => {
   const frames = framesOf(2048, 1024, 4);
   const hall = { rir: roomImpulse({ rt60: 0.7, drrDb: -4, seed: 1 }), ppm: 150, highpass: 400, gain: 0.35, noiseRms: 0.02 };
@@ -259,4 +278,17 @@ test('a reply at the chosen rate gets through the channel it was measured on', (
   const r = demodulateWaveAll(channel(modulateWave(frames, { profile: 'wave-ultra', ...rate }), ultraDesk(2)), { profile: 'wave-ultra' });
   assert.equal(delivered(r.frames, frames), frames.length);
   assert.equal(r.infos[0].mask, rate.mask);
+});
+
+/* At half scale a phone missed most Wave frames from its own speaker in a
+ * noisy room: every profile goes out near full scale, never past it. */
+test('wave profiles are sent near full scale without clipping at any output rate', () => {
+  const frames = framesOf(600, 256, 3);
+  const peak = (x) => x.reduce((m, v) => Math.max(m, Math.abs(v)), 0);
+  for (const profile of ['wave', 'wave-far', 'wave-ultra']) {
+    for (const fs of [48000, 44100]) {
+      const p = peak(modulateWave(frames, { profile, fs }));
+      assert.ok(p > 0.8 && p <= 1, `${profile} at ${fs}: peak ${p}`);
+    }
+  }
 });
