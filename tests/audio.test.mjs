@@ -7,7 +7,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { SonicAudio } from '../web/src/audio.js';
+import { SonicAudio, headroomVolume } from '../web/src/audio.js';
 import { Demodulator, PROFILES, modulateFrames } from '../web/src/modem.js';
 import { expectedFrameBytes, framesForText } from '../web/src/protocol.js';
 
@@ -111,4 +111,11 @@ test('a 40 ms burst of silence inserted by the capture path does not cost a stea
   const passed = new Float32Array(chunks.reduce((n, c) => n + c.length, 0));
   chunks.reduce((at, c) => (passed.set(c, at), at + c.length), 0);
   assert.equal(decode(passed, PROFILES.stealth), 1, 'the capture path drops the burst and the frame decodes');
+});
+
+test('inaudible data under a song takes the headroom the song leaves, without clipping', () => {
+  const data = Float32Array.of(0.2, -0.9, 0.5);
+  assert.ok(Math.abs(headroomVolume(data, 0.4, 0.35) - 0.6 / 0.9) < 1e-6, 'fills the range above the song');
+  assert.equal(headroomVolume(data, 0, 0.35), 1, 'never boosts past unity');
+  assert.equal(headroomVolume(data, 0.95, 0.35), 0.35, 'never drops below the chosen level');
 });

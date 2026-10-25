@@ -40,7 +40,7 @@ import {
   formatBytes,
   payloadBytesPerSecond,
 } from './transfer.js';
-import { SonicAudio, toWav } from './audio.js';
+import { SonicAudio, headroomVolume, toWav } from './audio.js';
 import { CODES } from './codes.js';
 import { initLinkUi } from './ui-link.js';
 
@@ -290,10 +290,16 @@ async function transmitOnce({ frames, repeats }, pass = 0) {
 
   const samples = modulateFrames(all, { fs, profile: profile() });
   setStatus($('send-status'), `On air: ${samples.length} samples at ${fs} Hz…`, '');
+  const inaudible = ['stealth', 'wave-ultra'].includes(state.profile);
   /* Dipping the song would announce an inaudible transmission to every listener. */
-  const wantsDuck = $('duck').checked && audio.musicSource && !['stealth', 'wave-ultra'].includes(state.profile);
+  const wantsDuck = $('duck').checked && audio.musicSource && !inaudible;
   if (wantsDuck) audio.duck(true);
-  await audio.playSamples(samples, { volume: parseFloat($('data-volume').value) });
+  /* The data level sets how audible data sits under a song; with no song it would
+   * only throw range away. */
+  const level = parseFloat($('data-volume').value);
+  const songPeak = audio.musicPeak * audio.musicBaseVolume;
+  const volume = !audio.musicSource ? 1 : inaudible ? headroomVolume(samples, songPeak, level) : level;
+  await audio.playSamples(samples, { volume });
   if (wantsDuck) audio.duck(false);
   $('send-wav').disabled = false;
   $('send-wav').onclick = () => {
@@ -544,7 +550,6 @@ $('btn-music-stop').addEventListener('click', () => {
 });
 
 $('music-volume').addEventListener('input', (e) => audio.setMusicVolume(parseFloat(e.target.value)));
-$('data-volume').addEventListener('input', (e) => audio.setDataVolume(parseFloat(e.target.value)));
 
 $('btn-stealth').addEventListener('click', () => {
   $('profile-select').value = 'stealth';

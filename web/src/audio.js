@@ -64,10 +64,6 @@ export class SonicAudio {
     if (this.musicGain) this.musicGain.gain.value = value;
   }
 
-  setDataVolume(value) {
-    if (this.dataGain) this.dataGain.gain.value = value;
-  }
-
   /* Play one modulated block. Resolves when it has finished sounding. */
   /* A new transmission replaces the one on air: two at once garble each other. */
   playSamples(samples, { volume = 1 } = {}) {
@@ -131,6 +127,10 @@ export class SonicAudio {
     source.buffer = buffer;
     source.loop = true;
     this.musicSource = source;
+    this.musicPeak = 0;
+    for (let c = 0; c < buffer.numberOfChannels; c++) {
+      for (const v of buffer.getChannelData(c)) this.musicPeak = Math.max(this.musicPeak, Math.abs(v));
+    }
     this.musicBaseVolume = volume;
     this.musicGain.gain.value = volume;
     source.connect(this.musicGain);
@@ -251,6 +251,15 @@ export class SonicAudio {
  * the run is dropped. Zeros at the end of a chunk are held back until the run's
  * length is known. */
 const DROPOUT_SAMPLES = 256;
+
+/* Inaudible data has nothing to hide under a song, so it takes all the range the
+ * song leaves free and never less than the chosen level: past full scale the sum
+ * would click audibly. */
+export function headroomVolume(samples, songPeak, level) {
+  let peak = 0;
+  for (const v of samples) peak = Math.max(peak, Math.abs(v));
+  return Math.min(1, Math.max(level, (1 - songPeak) / peak));
+}
 
 export function dropoutFilter() {
   let held = 0;
