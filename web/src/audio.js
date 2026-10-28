@@ -161,6 +161,7 @@ export class SonicAudio {
   /* Start listening. `onSamples` receives mono Float32Array chunks. */
   async startListening(onSamples) {
     const ctx = await this.context();
+    const worklet = await loadCaptureWorklet(ctx);
     const stream = await navigator.mediaDevices.getUserMedia(MIC_CONSTRAINTS);
     /* A start that overlapped this one (a second tap while the permission
      * prompt was open) may already own a pipeline. Two pipelines would feed one
@@ -176,18 +177,31 @@ export class SonicAudio {
     this.listenAnalyser = analyser;
     source.connect(analyser);
 
-    /* ScriptProcessor is deprecated but it is the one capture node that behaves
-     * identically in every browser and WebView we ship to, and the demodulator
-     * runs on the main thread either way. */
-    const processor = ctx.createScriptProcessor(4096, 1, 1);
-    this.processor = processor;
     const clean = dropoutFilter();
-    processor.onaudioprocess = (event) => {
-      const chunk = clean(event.inputBuffer.getChannelData(0));
+    const deliver = (samples) => {
+      const chunk = clean(samples);
       if (chunk.length) onSamples(chunk);
     };
+    /* The receivers run on the main thread, and a failed frame can hold it for
+     * over half a second on a phone. A ScriptProcessor refills its two buffers
+     * meanwhile and hands the late events whatever they hold by then, so the
+     * frame after a failed one was lost; the worklet's port queues it instead. */
+    let processor;
+    if (worklet) {
+      processor = new AudioWorkletNode(ctx, 'tonedrop-capture', {
+        numberOfInputs: 1,
+        numberOfOutputs: 1,
+        channelCount: 1,
+        channelCountMode: 'explicit',
+      });
+      processor.port.onmessage = (event) => deliver(event.data);
+    } else {
+      processor = ctx.createScriptProcessor(4096, 1, 1);
+      processor.onaudioprocess = (event) => deliver(event.inputBuffer.getChannelData(0));
+    }
+    this.processor = processor;
     source.connect(processor);
-    /* A ScriptProcessor only runs while connected to a destination; a muted
+    /* A capture node only runs while connected to a destination; a muted
      * gain node keeps it alive without echoing the microphone to the speakers. */
     const sink = ctx.createGain();
     sink.gain.value = 0;
@@ -198,7 +212,12 @@ export class SonicAudio {
 
   stopListening() {
     if (this.processor) {
-      this.processor.onaudioprocess = null;
+      if (this.processor.port) {
+        this.processor.port.onmessage = null;
+        this.processor.port.postMessage('stop');
+      } else {
+        this.processor.onaudioprocess = null;
+      }
       try {
         this.processor.disconnect();
       } catch {
@@ -243,6 +262,26 @@ export class SonicAudio {
     this.analyser.getByteFrequencyData(data);
     return { data, sampleRate: this.ctx.sampleRate, fftSize: this.analyser.fftSize };
   }
+}
+
+/* Each context loads the capture worklet once. A WebView without AudioWorklet,
+ * or one that will not load the module, captures through a ScriptProcessor. */
+const captureWorklets = new WeakMap();
+
+function loadCaptureWorklet(ctx) {
+  if (!ctx.audioWorklet || typeof AudioWorkletNode !== 'function') return Promise.resolve(false);
+  if (!captureWorklets.has(ctx)) {
+    const url = new URL('./capture-worklet.js', import.meta.url).href;
+    const loading = ctx.audioWorklet.addModule(url).then(
+      () => true,
+      (err) => {
+        if (typeof console !== 'undefined') console.warn('tonedrop: capture worklet unavailable, using ScriptProcessor', err);
+        return false;
+      },
+    );
+    captureWorklets.set(ctx, loading);
+  }
+  return captureWorklets.get(ctx);
 }
 
 /* Android's WebView capture now and then inserts 40 ms of digital silence when
