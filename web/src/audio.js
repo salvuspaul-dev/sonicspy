@@ -35,7 +35,13 @@ export class SonicAudio {
     this.transmitSource = null;
     this.transmitStartedAt = 0;
     this.transmitEndsAt = 0;
+    this.transmitEpoch = 0;
     this.musicBaseVolume = 0.5;
+    this.musicCeiling = Infinity;
+    this.musicBuffer = null;
+    this.musicPeak = 0;
+    this.musicOffset = 0;
+    this.musicStartedAt = 0;
   }
 
   async context() {
@@ -61,14 +67,36 @@ export class SonicAudio {
 
   setMusicVolume(value) {
     this.musicBaseVolume = value;
-    if (this.musicGain) this.musicGain.gain.value = value;
+    if (this.musicGain) this.musicGain.gain.value = this.musicLevel;
+  }
+
+  /* The song's gain as heard: the chosen volume, held under the ceiling. */
+  get musicLevel() {
+    return Math.min(this.musicBaseVolume, this.musicCeiling);
+  }
+
+  /* Hidden data is sent at a level that reaches the listener, and a loud song
+   * plus that level can pass full scale; the clipped peaks crackle, which
+   * gives the data away. A ceiling holds the song under what the data leaves
+   * free, for as long as the broadcast runs rather than frame by frame, so
+   * the song does not pump. Infinity lifts it. */
+  setMusicCeiling(gain) {
+    this.musicCeiling = gain;
+    if (!this.musicGain || !this.ctx) return;
+    const now = this.ctx.currentTime;
+    this.musicGain.gain.cancelScheduledValues(now);
+    this.musicGain.gain.setTargetAtTime(this.musicLevel, now, 0.15);
   }
 
   /* Play one modulated block. Resolves when it has finished sounding. */
-  /* A new transmission replaces the one on air: two at once garble each other. */
+  /* A new transmission replaces the one on air: two at once garble each other.
+   * A stop that lands while the context is still starting cancels the block:
+   * a broadcast paused at that moment would otherwise send a whole pass. */
   playSamples(samples, { volume = 1 } = {}) {
+    const epoch = this.transmitEpoch;
     return this.context().then((ctx) => {
-      this.stopTransmit();
+      if (epoch !== this.transmitEpoch) return;
+      this.#endTransmitSource();
       const buffer = ctx.createBuffer(1, samples.length, ctx.sampleRate);
       buffer.copyToChannel(samples, 0);
       const source = ctx.createBufferSource();
@@ -90,6 +118,11 @@ export class SonicAudio {
   }
 
   stopTransmit() {
+    this.transmitEpoch++;
+    this.#endTransmitSource();
+  }
+
+  #endTransmitSource() {
     if (this.transmitSource) {
       try {
         this.transmitSource.stop();
@@ -118,26 +151,69 @@ export class SonicAudio {
     return ctx.decodeAudioData(bytes);
   }
 
-  /* Start music looping under the data signal. Callers drive the data
-   * transmission separately so the two can loop independently. */
-  async startMusic(buffer, { volume = 0.5 } = {}) {
+  /* Start music looping under the data signal, `offset` seconds in. Callers
+   * drive the data transmission separately so the two can loop, and pause,
+   * independently. */
+  async startMusic(buffer, { volume = this.musicBaseVolume, offset = 0 } = {}) {
     const ctx = await this.context();
-    this.stopMusic();
+    this.#endMusicSource();
+    if (this.musicBuffer !== buffer) {
+      this.musicBuffer = buffer;
+      this.musicPeak = 0;
+      for (let c = 0; c < buffer.numberOfChannels; c++) {
+        for (const v of buffer.getChannelData(c)) this.musicPeak = Math.max(this.musicPeak, Math.abs(v));
+      }
+    }
     const source = ctx.createBufferSource();
     source.buffer = buffer;
     source.loop = true;
     this.musicSource = source;
-    this.musicPeak = 0;
-    for (let c = 0; c < buffer.numberOfChannels; c++) {
-      for (const v of buffer.getChannelData(c)) this.musicPeak = Math.max(this.musicPeak, Math.abs(v));
-    }
     this.musicBaseVolume = volume;
-    this.musicGain.gain.value = volume;
+    this.musicGain.gain.value = this.musicLevel;
+    this.musicOffset = ((offset % buffer.duration) + buffer.duration) % buffer.duration;
+    this.musicStartedAt = ctx.currentTime;
     source.connect(this.musicGain);
-    source.start();
+    source.start(0, this.musicOffset);
   }
 
+  get musicPlaying() {
+    return this.musicSource !== null;
+  }
+
+  /* Seconds into the track: where it is playing now, or where it was paused. */
+  musicPosition() {
+    if (!this.musicBuffer) return 0;
+    if (!this.musicSource) return this.musicOffset;
+    return (this.musicOffset + this.ctx.currentTime - this.musicStartedAt) % this.musicBuffer.duration;
+  }
+
+  pauseMusic() {
+    if (!this.musicSource) return;
+    this.musicOffset = this.musicPosition();
+    this.#endMusicSource();
+  }
+
+  resumeMusic() {
+    if (!this.musicBuffer || this.musicSource) return Promise.resolve();
+    return this.startMusic(this.musicBuffer, { offset: this.musicOffset });
+  }
+
+  seekMusic(seconds) {
+    if (!this.musicBuffer) return Promise.resolve();
+    if (!this.musicSource) {
+      this.musicOffset = Math.max(0, Math.min(this.musicBuffer.duration, seconds));
+      return Promise.resolve();
+    }
+    return this.startMusic(this.musicBuffer, { offset: seconds });
+  }
+
+  /* Stop and rewind to the start of the track. */
   stopMusic() {
+    this.#endMusicSource();
+    this.musicOffset = 0;
+  }
+
+  #endMusicSource() {
     if (this.musicSource) {
       try {
         this.musicSource.stop();
@@ -153,7 +229,7 @@ export class SonicAudio {
   duck(on) {
     if (!this.musicGain || !this.ctx) return;
     const now = this.ctx.currentTime;
-    const target = on ? this.musicBaseVolume * 0.18 : this.musicBaseVolume;
+    const target = on ? this.musicLevel * 0.18 : this.musicLevel;
     this.musicGain.gain.cancelScheduledValues(now);
     this.musicGain.gain.setTargetAtTime(target, now, 0.04);
   }
@@ -168,6 +244,7 @@ export class SonicAudio {
      * receiver interleaved chunks, and stopListening could only reach the last. */
     this.stopListening();
     this.stream = stream;
+    this.onSamples = onSamples;
     const source = ctx.createMediaStreamSource(stream);
     this.micSource = source;
 
@@ -208,6 +285,26 @@ export class SonicAudio {
     processor.connect(sink).connect(ctx.destination);
     this.micSink = sink;
     return ctx.sampleRate;
+  }
+
+  /* A capture that has gone quiet: the system suspended the context (the app
+   * sent to the background, the screen locked) or ended the microphone track
+   * (another app took it). Resume the one, reopen the other. */
+  wake() {
+    if (!this.stream || this.reopening) return this.reopening ?? Promise.resolve();
+    const lost = this.stream.getTracks().some((t) => t.readyState === 'ended');
+    if (lost) {
+      this.reopening = this.startListening(this.onSamples)
+        .catch(() => {})
+        .finally(() => {
+          this.reopening = null;
+        });
+      return this.reopening;
+    }
+    return this.context().then(
+      () => {},
+      () => {},
+    );
   }
 
   stopListening() {
@@ -295,9 +392,21 @@ const DROPOUT_SAMPLES = 256;
  * song leaves free and never less than the chosen level: past full scale the sum
  * would click audibly. */
 export function headroomVolume(samples, songPeak, level) {
+  return Math.min(1, Math.max(level, (1 - songPeak) / peakOf(samples)));
+}
+
+/* The loudest gain a song peaking at `trackPeak` may play at while data
+ * peaking at `dataPeak` shares the output, so the sum never passes full
+ * scale. That holds whenever the chosen data level is more than the song's
+ * free range. */
+export function songCeiling(trackPeak, dataPeak) {
+  return trackPeak > 0 ? Math.max(0, 1 - dataPeak) / trackPeak : Infinity;
+}
+
+export function peakOf(samples) {
   let peak = 0;
   for (const v of samples) peak = Math.max(peak, Math.abs(v));
-  return Math.min(1, Math.max(level, (1 - songPeak) / peak));
+  return peak;
 }
 
 export function dropoutFilter() {

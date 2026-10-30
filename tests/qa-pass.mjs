@@ -118,7 +118,10 @@ check('a small file previews successfully', /small\.txt/.test(smallEta) && /on a
 
 /* The boundary my fix introduced: incompressible data past the 16-bit chunk
  * ceiling. Before the fix this silently previewed a truncated send and told the
- * user it was complete; it must now refuse out loud, and must not crash. */
+ * user it was complete; it must now refuse out loud, and must not crash.
+ * 4.4 MB passes the ceiling in MFSK's 64-byte chunks; Wave, the default since
+ * 3.0, carries 1024 bytes a chunk, so the same file is only 4506 of them. */
+await page.selectOption('#profile-select', 'turbo');
 const oversize = randomFillSync(Buffer.alloc(4.4 * 1024 * 1024));
 await page.setInputFiles('#send-file-input', {
   name: 'oversize.bin',
@@ -139,6 +142,7 @@ check(
 check('the refusal is styled as an error, not a success', /error/.test(statusClass ?? ''), String(statusClass));
 check('the oversize attempt did not report a successful send', etaAfter === etaBefore, `eta="${etaAfter}"`);
 await page.screenshot({ path: join(shotDir, 'oversize-refused.png'), fullPage: true });
+await page.selectOption('#profile-select', 'wave');
 
 /* --- hex mode edges ------------------------------------------------------- */
 await page.click('.sub-tab[data-sendmode="bytes"]');
@@ -194,8 +198,9 @@ await page.click('#btn-code-play');
 check('playing nothing is refused readably', /type something/i.test(await page.locator('#code-status').innerText()));
 
 await page.click('.tab[data-panel="music"]');
-await page.click('#btn-stealth');
-check('the stealth button selects the stealth profile', (await page.inputValue('#profile-select')) === 'stealth');
+check('the music player hides its broadcast as stealth by default', (await page.inputValue('#cast-mode')) === 'stealth');
+check('the player waits for a track before it plays', await page.isDisabled('#btn-music-play'));
+await page.selectOption('#profile-select', 'stealth');
 check('the profile line shows the near-ultrasonic band', /17250–18563 Hz/.test(await page.locator('#profile-detail').innerText()));
 await page.selectOption('#profile-select', 'robust');
 

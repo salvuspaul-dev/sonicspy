@@ -7,7 +7,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { SonicAudio, headroomVolume } from '../web/src/audio.js';
+import { SonicAudio, headroomVolume, peakOf, songCeiling } from '../web/src/audio.js';
 import { Demodulator, MODES, PROFILES, modulateFrames } from '../web/src/modem.js';
 import { expectedFrameBytes, framesForText, onAir } from '../web/src/protocol.js';
 
@@ -262,4 +262,140 @@ test('inaudible data under a song takes the headroom the song leaves, without cl
   assert.ok(Math.abs(headroomVolume(data, 0.4, 0.35) - 0.6 / 0.9) < 1e-6, 'fills the range above the song');
   assert.equal(headroomVolume(data, 0, 0.35), 1, 'never boosts past unity');
   assert.equal(headroomVolume(data, 0.95, 0.35), 0.35, 'never drops below the chosen level');
+});
+
+/* A context the real SonicAudio.context() builds its graph on, with a clock
+ * the test moves and a record of every buffer source started. */
+function transportContext() {
+  const node = () => ({ connect: (next) => next, disconnect() {} });
+  const started = [];
+  const ctx = {
+    sampleRate: 48000,
+    currentTime: 0,
+    state: 'running',
+    destination: node(),
+    createAnalyser: node,
+    createGain: () => ({ ...node(), gain: { value: 1, cancelScheduledValues() {}, setTargetAtTime(v) { this.value = v; } } }),
+    createBuffer: (channels, length, rate) => ({ duration: length / rate, copyToChannel() {} }),
+    createBufferSource() {
+      const source = {
+        ...node(),
+        onended: null,
+        start(when = 0, offset = 0) {
+          started.push({ source, offset });
+        },
+        stop() {
+          source.onended?.();
+        },
+      };
+      return source;
+    },
+  };
+  globalThis.window = { AudioContext: function AudioContext() { return ctx; } };
+  return { ctx, started };
+}
+
+const song = (seconds, peak) => ({ duration: seconds, numberOfChannels: 1, getChannelData: () => Float32Array.of(0.1, -peak, 0.3) });
+
+test('music pauses and resumes where it was, seeks, and stop rewinds', async () => {
+  const { ctx, started } = transportContext();
+  const audio = new SonicAudio();
+  const track = song(30, 1);
+  await audio.startMusic(track, { volume: 0.5 });
+  assert.equal(started.at(-1).offset, 0);
+  ctx.currentTime = 12.5;
+  audio.pauseMusic();
+  assert.equal(audio.musicPlaying, false);
+  ctx.currentTime = 40;
+  assert.equal(audio.musicPosition(), 12.5, 'a paused song stays where it stopped');
+  await audio.resumeMusic();
+  assert.equal(started.at(-1).offset, 12.5, 'resume starts from the pause point');
+  ctx.currentTime = 60;
+  assert.equal(audio.musicPosition(), 2.5, 'the loop wraps the position');
+  await audio.seekMusic(7);
+  assert.equal(started.at(-1).offset, 7);
+  audio.stopMusic();
+  assert.equal(audio.musicPosition(), 0);
+  delete globalThis.window;
+});
+
+test('a loud song is held under hidden data so the mix never passes full scale', async () => {
+  transportContext();
+  const audio = new SonicAudio();
+  await audio.startMusic(song(30, 1), { volume: 0.95 });
+  const profile = MODES['wave-ultra'];
+  const samples = modulateFrames(framesForText('under a loud master', { chunkBytes: profile.chunkBytes }).frames, { fs: 48000, profile });
+  const dataPeak = headroomVolume(samples, audio.musicPeak * audio.musicBaseVolume, 0.35) * peakOf(samples);
+  assert.ok(audio.musicLevel * audio.musicPeak + dataPeak > 1, 'without a ceiling the two would clip');
+  audio.setMusicCeiling(songCeiling(audio.musicPeak, dataPeak));
+  assert.ok(audio.musicLevel * audio.musicPeak + dataPeak <= 1 + 1e-9, 'with it they fit');
+  assert.equal(audio.musicGain.gain.value, audio.musicLevel);
+  audio.setMusicVolume(1);
+  assert.ok(audio.musicLevel * audio.musicPeak + dataPeak <= 1 + 1e-9, 'turning the song up mid-broadcast still fits');
+  audio.setMusicCeiling(Infinity);
+  assert.equal(audio.musicLevel, 1, 'the ceiling lifts when the broadcast ends');
+  delete globalThis.window;
+});
+
+test('a stop while a send is still starting cancels it, and a new send still replaces the old', async () => {
+  const { ctx, started } = transportContext();
+  const audio = new SonicAudio();
+  let release;
+  audio.context = () => new Promise((resolve) => { release = () => resolve(ctx); });
+  const paused = audio.playSamples(Float32Array.of(0.1, 0.2));
+  audio.stopTransmit();
+  release();
+  await paused;
+  assert.equal(started.length, 0, 'a broadcast paused while starting sends nothing');
+
+  audio.context = async () => ctx;
+  const first = audio.playSamples(Float32Array.of(0.1));
+  const second = audio.playSamples(Float32Array.of(0.2));
+  await first;
+  assert.equal(started.length, 2, 'the second send replaced the first');
+  audio.stopTransmit();
+  await second;
+  delete globalThis.window;
+});
+
+test('a capture the system paused is woken, and a lost microphone is reopened', async () => {
+  const ctx = fakeContext();
+  let resumed = 0;
+  ctx.state = 'running';
+  ctx.resume = async () => {
+    resumed++;
+    ctx.state = 'running';
+  };
+  const tracks = [];
+  Object.defineProperty(globalThis, 'navigator', {
+    value: {
+      mediaDevices: {
+        getUserMedia: async () => {
+          const track = { readyState: 'live', stop() { this.readyState = 'ended'; } };
+          tracks.push(track);
+          return { getTracks: () => [track] };
+        },
+      },
+    },
+    configurable: true,
+  });
+  globalThis.window = { AudioContext: function AudioContext() { return ctx; } };
+  const audio = new SonicAudio();
+  const heard = [];
+  await audio.startListening((chunk) => heard.push(chunk));
+
+  ctx.state = 'suspended';
+  await audio.wake();
+  assert.equal(resumed, 1, 'a suspended context is resumed');
+
+  tracks[0].readyState = 'ended';
+  await audio.wake();
+  assert.equal(tracks.length, 2, 'an ended microphone track is reopened');
+  const live = ctx.processors.filter((p) => p.onaudioprocess);
+  assert.equal(live.length, 1, 'one pipeline after the reopen');
+  live[0].onaudioprocess({ inputBuffer: { getChannelData: () => Float32Array.of(0.1, 0.2) } });
+  assert.equal(heard.length, 1, 'the reopened pipeline feeds the same receiver');
+  audio.stopListening();
+  assert.equal(tracks[1].readyState, 'ended');
+  delete globalThis.window;
 });
