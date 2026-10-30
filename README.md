@@ -13,7 +13,7 @@ It is useful when there is no usable link: no Wi-Fi, no cellular, no Bluetooth p
 - **ggwave and gibberlink compatible** — the official ggwave build is vendored unmodified, so Tonedrop sends and receives every ggwave protocol, audible and ultrasound.
 - **Text, files and hex** — send a sentence, a document, an image or arbitrary bytes.
 - **Broadcast, not unicast** — a laptop plays a loop of frames; every phone in the room that is listening collects the same payload. Devices can join halfway through and still reconstruct the whole thing.
-- **Music carrier** — hide the data inside music that is already playing, so a normal playlist doubles as a data channel.
+- **Music carrier** — a record player that hides the data inside the song it plays, so a normal playlist doubles as a data channel. Music and broadcast pause independently.
 - **Built for real rooms** — a room keeps ringing with every tone long after it stops. Rotating tone sets, echo-cancelling detection and Reed-Solomon error correction keep transfers working through that echo, not only in a quiet lab.
 - **Real-time receive** — a live spectrum display shows signal strength and which tones are arriving, with per-transfer progress.
 - **Loops long messages** — a long message is repeated so late arrivals still get every chunk, and the receiver reassembles them in any order.
@@ -104,7 +104,9 @@ In the same furnished-room case the original modem decoded 0% on every profile. 
 
 ## Stealth: messages inside a song
 
-Open **Music carrier**, load any track and press Play, press **Switch to Stealth**, then send or broadcast from **Send**. The receiving device selects **Stealth** and listens. A test decodes stealth frames under a music bed more than 20 dB louder than the data, with broadband hiss at the data's own level.
+Open **Music carrier**: it is a record player. Load any track and press **Play music**; the record turns while the song plays. Type a message (or set one up on **Send**) and press **Start broadcast**; the record glows and reads *On air*. Music and broadcast pause and resume on their own, so the song can keep playing with the broadcast paused, or the other way round. The broadcast hides as **Stealth** by default; the receiving device opens **Listen**, where **Hear every mode** (on by default) means it does not need to pick the same mode. A test decodes stealth frames under a music bed more than 20 dB louder than the data, with broadband hiss at the data's own level.
+
+Stealth is the default hiding place because of what it sounds like, not only what it measures. Its pitch glides from one tone to the next instead of jumping, which keeps its power below 15 kHz under -80 dB of the signal (a hard jump put -47 dB there, where the ear is tens of dB keener than at 18 kHz). Wave Ultra measures as clean on paper, but it sounds hundreds of tones at once; a phone speaker driven hard turns their beating into a hiss in the audible band (about -50 dB through a model of a speaker with 2% second-order distortion, against -131 dB for Stealth). And when a loud song leaves less room than the data level needs, the song is held a little lower for as long as the broadcast runs, so the two never clip together.
 
 Honest limits: the speaker and microphone must reach 18.6 kHz. Most phones and laptops do; some cheap speakers, Bluetooth codecs and video-call audio paths cut everything above 16 kHz, and then nothing arrives. Children, pets and some young adults can hear that band as a faint whine. "Stealth" means unnoticed by ear, not secret — anyone running a receiver hears the bytes.
 

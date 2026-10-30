@@ -40,7 +40,7 @@ import {
   formatBytes,
   payloadBytesPerSecond,
 } from './transfer.js';
-import { SonicAudio, headroomVolume, toWav } from './audio.js';
+import { SonicAudio, headroomVolume, peakOf, songCeiling, toWav } from './audio.js';
 import { CODES } from './codes.js';
 import { initLinkUi } from './ui-link.js';
 
@@ -50,11 +50,15 @@ const $ = (id) => document.getElementById(id);
 const state = {
   profile: 'wave',
   listening: false,
-  demod: null,
+  demods: [],
   reassembler: null,
-  carrier: null,
   selfTestDone: false,
 };
+
+/* The broadcast loop, driven from Send and from the music player. `run`
+ * changes on every stop, so a loop still asleep from an earlier start sees it
+ * is stale and ends instead of sending alongside the new one. */
+const cast = { on: false, paused: false, send: null, pass: 0, run: 0, wake: null };
 
 /* ------------------------------------------------------------------ helpers */
 
@@ -136,7 +140,7 @@ function renderProfileInfo() {
 $('profile-select').addEventListener('change', (e) => {
   state.profile = e.target.value;
   renderProfileInfo();
-  if (state.demod) restartDemodulator();
+  if (state.listening) restartDemodulator();
 });
 
 function renderToneTable() {
@@ -176,17 +180,24 @@ function renderToneTable() {
 
 let pendingSend = null;
 
-async function buildFrames() {
+const sendRepeats = () => Math.max(1, Math.min(20, parseInt($('repeats').value, 10) || 1));
+
+function textToSend(text, mode) {
+  const { id, frames } = framesForText(text, { chunkBytes: MODES[mode].chunkBytes });
+  return { id, frames, repeats: sendRepeats(), mode, label: `${text.length} characters of text`, bytes: new TextEncoder().encode(text).length };
+}
+
+/* Frames for what the Send tab holds, in `mode` (a key of MODES). */
+async function buildFrames(mode = state.profile) {
   const active = document.querySelector('[data-sendmode].active').dataset.sendmode;
-  const repeats = Math.max(1, Math.min(20, parseInt($('repeats').value, 10) || 1));
+  const repeats = sendRepeats();
   const compress = $('compress').checked;
-  const chunkBytes = profile().chunkBytes;
+  const chunkBytes = MODES[mode].chunkBytes;
 
   if (active === 'text') {
     const text = $('send-text-input').value;
     if (!text.trim()) throw new Error('Type a message first.');
-    const { id, frames } = framesForText(text, { chunkBytes });
-    return { id, frames, repeats, label: `${text.length} characters of text`, bytes: new TextEncoder().encode(text).length };
+    return textToSend(text, mode);
   }
 
   if (active === 'file') {
@@ -203,6 +214,7 @@ async function buildFrames() {
       id,
       frames,
       repeats,
+      mode,
       label: `${safeFileName(file.name)} (${formatBytes(raw.length)}${gzipped ? `, compressed to ${formatBytes(data.length)}` : ''})`,
       bytes: packed.length,
       rawBytes: raw.length,
@@ -214,13 +226,16 @@ async function buildFrames() {
   if (bytes.length === 0) throw new Error('Enter some hex bytes first.');
   const packed = packFileContainer({ name: 'payload.bin', mime: 'application/octet-stream', data: bytes });
   const { id, frames } = framesForBinary(packed, { chunkBytes });
-  return { id, frames, repeats, label: `${bytes.length} raw bytes`, bytes: packed.length };
+  return { id, frames, repeats, mode, label: `${bytes.length} raw bytes`, bytes: packed.length };
 }
 
-function describeCost({ frames, repeats, label }) {
-  const seconds = frames.reduce((n, f) => n + frameSeconds(profile(), f.length), 0) * repeats;
-  $('send-eta').textContent = `${label} → ${frames.length} frame${frames.length === 1 ? '' : 's'} × ${repeats} repeat${repeats === 1 ? '' : 's'} ≈ ${formatDuration(seconds)} on air`;
-  return seconds;
+function costText({ frames, repeats, label, mode }) {
+  const seconds = frames.reduce((n, f) => n + frameSeconds(MODES[mode], f.length), 0) * repeats;
+  return `${label} → ${frames.length} frame${frames.length === 1 ? '' : 's'} × ${repeats} repeat${repeats === 1 ? '' : 's'} ≈ ${formatDuration(seconds)} on air`;
+}
+
+function describeCost(send) {
+  $('send-eta').textContent = costText(send);
 }
 
 $('btn-preview').addEventListener('click', async () => {
@@ -246,65 +261,133 @@ $('btn-send').addEventListener('click', async () => {
 
 $('btn-stop-send').addEventListener('click', () => {
   audio.stopTransmit();
-  stopCarrier();
+  stopBroadcast();
   setStatus($('send-status'), 'Stopped.', '');
 });
 
 $('btn-broadcast').addEventListener('click', async () => {
-  if (state.carrier) {
-    stopCarrier();
+  if (cast.on) {
+    stopBroadcast();
     setStatus($('send-status'), 'Broadcast loop stopped.', '');
     return;
   }
   try {
     pendingSend = await buildFrames();
     describeCost(pendingSend);
-    state.carrier = true;
-    $('btn-broadcast').textContent = 'Stop broadcast loop';
     setStatus($('send-status'), 'Broadcasting on repeat — a listener joining late still gets the whole message.', 'ok');
-    for (let pass = 0; state.carrier; pass++) {
-      await transmitOnce(pendingSend, pass);
-      if (!state.carrier) break;
-      await sleep(700);
-    }
+    await runBroadcast(pendingSend);
   } catch (err) {
     setStatus($('send-status'), err.message, 'error');
-    stopCarrier();
   }
 });
 
-function stopCarrier() {
-  state.carrier = null;
-  $('btn-broadcast').textContent = 'Broadcast loop (keep playing)';
-  audio.duck(false);
+/* Sends `send` pass after pass until stopped; a pause holds the loop between
+ * passes. Rejects if a pass fails, after stopping the loop. */
+async function runBroadcast(send) {
+  stopBroadcast();
+  const run = cast.run;
+  Object.assign(cast, { on: true, paused: false, send, pass: 0 });
+  renderCast();
+  const live = () => cast.run === run;
+  try {
+    while (live()) {
+      if (cast.paused) {
+        await new Promise((resolve) => {
+          cast.wake = resolve;
+        });
+        continue;
+      }
+      await transmitOnce(cast.send, cast.pass++);
+      renderCast();
+      if (live() && !cast.paused) await sleep(700);
+    }
+  } catch (err) {
+    if (live()) stopBroadcast();
+    throw err;
+  }
 }
 
-async function transmitOnce({ frames, repeats }, pass = 0) {
+/* Cuts the frame on air; a listener misses at most that one, and the loop
+ * sends every frame again on the next pass. */
+function pauseBroadcast() {
+  if (!cast.on || cast.paused) return;
+  cast.paused = true;
+  audio.stopTransmit();
+  audio.setMusicCeiling(Infinity);
+  renderCast();
+}
+
+function resumeBroadcast() {
+  if (!cast.on || !cast.paused) return;
+  cast.paused = false;
+  cast.wake?.();
+  renderCast();
+}
+
+function stopBroadcast() {
+  const wasOn = cast.on;
+  cast.run++;
+  Object.assign(cast, { on: false, paused: false });
+  cast.wake?.();
+  cast.wake = null;
+  if (wasOn) audio.stopTransmit();
+  audio.setMusicCeiling(Infinity);
+  audio.duck(false);
+  renderCast();
+}
+
+function renderCast() {
+  $('btn-broadcast').textContent = cast.on ? 'Stop broadcast loop' : 'Broadcast loop (keep playing)';
+  $('btn-cast').textContent = !cast.on ? 'Start broadcast' : cast.paused ? 'Resume broadcast' : 'Pause broadcast';
+  $('btn-cast-stop').disabled = !cast.on;
+  $('deck').classList.toggle('casting', cast.on && !cast.paused);
+  $('deck').classList.toggle('cast-paused', cast.on && cast.paused);
+  if (!cast.on) {
+    setStatus($('cast-status'), 'Broadcast off.', '');
+  } else if (cast.paused) {
+    setStatus($('cast-status'), `Broadcast paused after ${cast.pass} pass${cast.pass === 1 ? '' : 'es'}. Resume picks up with the next pass.`, '');
+  } else {
+    const hidden = ['stealth', 'wave-ultra'].includes(cast.send.mode) ? 'hidden' : 'audible';
+    setStatus($('cast-status'), `On air, ${hidden}, as ${MODES[cast.send.mode].label}: ${costText(cast.send)} per pass · pass ${cast.pass + 1}.`, 'ok');
+  }
+}
+
+/* While song and data play together, the song is held where their peaks sum
+ * to full scale at most (see SonicAudio.setMusicCeiling). */
+function holdRoomFor(dataPeak) {
+  audio.setMusicCeiling(audio.musicBuffer ? songCeiling(audio.musicPeak, dataPeak) : Infinity);
+}
+
+async function transmitOnce({ frames, repeats, mode }, pass = 0) {
   await audio.context();
   const fs = audio.sampleRate;
+  const p = MODES[mode];
   /* Wave repeats are fountain repair frames, and so is every later broadcast
    * pass: a listener who joined late needs any K frames, not the ones it missed. */
-  const wave = profile().phy === 'ofdm';
+  const wave = p.phy === 'ofdm';
   const n = frames.length * repeats;
   const all = wave && pass > 0 ? repairFrames(frames, n, pass * n) : onAir(frames, repeats, { fountain: wave });
 
-  const samples = modulateFrames(all, { fs, profile: profile() });
+  const samples = modulateFrames(all, { fs, profile: p });
   setStatus($('send-status'), `On air: ${samples.length} samples at ${fs} Hz…`, '');
-  const inaudible = ['stealth', 'wave-ultra'].includes(state.profile);
+  const inaudible = ['stealth', 'wave-ultra'].includes(mode);
   /* Dipping the song would announce an inaudible transmission to every listener. */
-  const wantsDuck = $('duck').checked && audio.musicSource && !inaudible;
+  const wantsDuck = $('duck').checked && audio.musicPlaying && !inaudible;
   if (wantsDuck) audio.duck(true);
   /* The data level sets how audible data sits under a song; with no song it would
    * only throw range away. */
   const level = parseFloat($('data-volume').value);
   const songPeak = audio.musicPeak * audio.musicBaseVolume;
-  const volume = !audio.musicSource ? 1 : inaudible ? headroomVolume(samples, songPeak, level) : level;
+  const volume = !audio.musicPlaying ? 1 : inaudible ? headroomVolume(samples, songPeak, level) : level;
+  holdRoomFor(volume * peakOf(samples));
   await audio.playSamples(samples, { volume });
   if (wantsDuck) audio.duck(false);
+  /* A loop keeps the room between passes, so the song does not pump. */
+  if (!cast.on || cast.paused) audio.setMusicCeiling(Infinity);
   $('send-wav').disabled = false;
   $('send-wav').onclick = () => {
     const wav = toWav(samples, fs);
-    download(wav, `tonedrop-${state.profile}.wav`, 'audio/wav');
+    download(wav, `tonedrop-${mode}.wav`, 'audio/wav');
   };
 }
 
@@ -316,19 +399,43 @@ $('btn-random').addEventListener('click', () => {
 
 /* ---------------------------------------------------------------- listen */
 
+/* A listener tuned to one mode hears nothing from a sender on another, with no
+ * sign of why; the music player hides data as Stealth whatever the profile
+ * says. So by default a receiver runs for every mode, as Translate does, all
+ * feeding one reassembler: each frame carries its own message id. */
+function listenModes() {
+  return $('listen-any').checked ? Object.keys(MODES) : [state.profile];
+}
+
 function restartDemodulator() {
   const fs = audio.sampleRate || 48000;
-  state.demod = new Demodulator({
-    fs,
-    profile: profile(),
-    squelch: parseFloat($('squelch').value),
-    expectedFrameBytes: (prefix, len) => 17 + len + 2,
-    onFrame: (bytes) => state.reassembler.accept(bytes),
-    onPreamble: (score) => {
-      state.lastPreamble = score;
-    },
-  });
+  state.demods = listenModes().map(
+    (mode) =>
+      new Demodulator({
+        fs,
+        profile: MODES[mode],
+        squelch: parseFloat($('squelch').value),
+        expectedFrameBytes: (prefix, len) => 17 + len + 2,
+        onFrame: (bytes) => state.reassembler.accept(bytes),
+        onPreamble: (score) => {
+          state.lastPreamble = score;
+        },
+      }),
+  );
 }
+
+function describeListening(fs) {
+  const p = profile();
+  const carriers = p.phy === 'ofdm' ? `${layout(p).bins.length} OFDM carriers` : `${toneCount(p)} tones`;
+  const tuned = $('listen-any').checked ? `all ${state.demods.length} modes` : `${p.label} · ${carriers}`;
+  $('device-info').textContent = `capture ${fs} Hz · ${tuned} · squelch ${$('squelch').value}`;
+}
+
+$('listen-any').addEventListener('change', () => {
+  if (!state.listening) return;
+  restartDemodulator();
+  describeListening(audio.sampleRate);
+});
 
 $('btn-listen').addEventListener('click', async () => {
   if (state.listening) {
@@ -345,15 +452,16 @@ $('btn-listen').addEventListener('click', async () => {
       onComplete: onMessage,
     });
     const fs = await audio.startListening((chunk) => {
-      if (state.demod) state.demod.push(chunk);
+      state.heardAt = performance.now();
+      for (const d of state.demods) d.push(chunk);
     });
     restartDemodulator();
+    state.heardAt = performance.now();
+    state.stalled = false;
     state.listening = true;
     $('btn-listen').textContent = 'Stop listening';
     setStatus($('listen-status'), `Listening at ${fs} Hz — every frame passing CRC is shown below.`, 'ok');
-    const p = profile();
-    const carriers = p.phy === 'ofdm' ? `${layout(p).bins.length} OFDM carriers` : `${toneCount(p)} tones`;
-    $('device-info').textContent = `capture ${fs} Hz · ${carriers} · squelch ${$('squelch').value}`;
+    describeListening(fs);
   } catch (err) {
     setStatus($('listen-status'), `Microphone unavailable: ${err.message}`, 'error');
   } finally {
@@ -371,8 +479,23 @@ function stopDataListening() {
   setStatus($('listen-status'), 'Not listening.', '');
 }
 
+/* The capture delivers a chunk every 85 ms. When it stops, the tab would go on
+ * saying "Listening" while nothing can be heard, so say so and wake it. */
+const STALL_MS = 3000;
+setInterval(() => {
+  if (!state.listening) return;
+  if (performance.now() - state.heardAt > STALL_MS) {
+    if (!state.stalled) setStatus($('listen-status'), 'No sound from the microphone: the system paused it. Waking it…', 'error');
+    state.stalled = true;
+    audio.wake();
+  } else if (state.stalled) {
+    state.stalled = false;
+    setStatus($('listen-status'), `Listening again at ${audio.sampleRate} Hz.`, 'ok');
+  }
+}, 500);
+
 $('squelch').addEventListener('input', () => {
-  if (state.demod) state.demod.squelch = parseFloat($('squelch').value);
+  for (const d of state.demods) d.squelch = parseFloat($('squelch').value);
 });
 
 $('btn-clear').addEventListener('click', () => {
@@ -516,46 +639,119 @@ function drawSpectrum() {
 drawSpectrum();
 
 setInterval(() => {
-  if (!state.demod) return;
-  $('stat-frames').textContent = state.demod.framesDecoded;
-  $('stat-crc').textContent = state.demod.crcFailures;
+  if (!state.demods.length) return;
+  $('stat-frames').textContent = state.demods.reduce((n, d) => n + d.framesDecoded, 0);
+  $('stat-crc').textContent = state.demods.reduce((n, d) => n + d.crcFailures, 0);
   $('stat-score').textContent = (state.lastPreamble ?? 0).toFixed(2);
 }, 400);
 
 /* --------------------------------------------------------------- music */
 
 let musicBuffer = null;
+let seeking = false;
+
+const clock = (seconds) => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`;
+
+function renderMusic() {
+  const playing = audio.musicPlaying;
+  const at = audio.musicPosition();
+  const paused = !playing && musicBuffer !== null && at > 0;
+  $('deck').classList.toggle('playing', playing);
+  $('deck').classList.toggle('paused', paused);
+  $('btn-music-play').textContent = playing ? 'Pause music' : paused ? 'Resume music' : 'Play music';
+  $('btn-music-play').disabled = !musicBuffer;
+  $('btn-music-stop').disabled = !playing && !paused;
+  if (!seeking) {
+    $('music-seek').value = at;
+    $('music-time').textContent = clock(at);
+  }
+}
 
 $('music-file').addEventListener('change', async (e) => {
   const file = e.target.files[0];
   if (!file) return;
   try {
-    musicBuffer = await audio.loadMusic(file);
-    $('btn-music-play').disabled = false;
-    setStatus($('music-status'), `Loaded ${file.name} (${formatDuration(musicBuffer.duration)}).`, 'ok');
+    const buffer = await audio.loadMusic(file);
+    audio.stopMusic();
+    musicBuffer = buffer;
+    const name = file.name.replace(/\.[^.]+$/, '');
+    $('track-name').textContent = name;
+    $('disc-label').textContent = name;
+    $('music-seek').max = buffer.duration;
+    $('music-seek').disabled = false;
+    $('music-duration').textContent = clock(buffer.duration);
+    setStatus($('music-status'), `Loaded ${file.name} (${formatDuration(buffer.duration)}). Press Play music.`, 'ok');
   } catch (err) {
     setStatus($('music-status'), `Could not decode that audio: ${err.message}`, 'error');
   }
+  renderMusic();
 });
+
+/* Data already on air was levelled for the song as it was; when the song
+ * comes back, cut that pass so the next one is levelled for the song. */
+function relevelCast() {
+  if (!cast.on || cast.paused || !audio.transmitting) return;
+  audio.stopTransmit();
+  /* That pass, at full level with no song, left almost no room for the song. */
+  audio.setMusicCeiling(Infinity);
+}
 
 $('btn-music-play').addEventListener('click', async () => {
   if (!musicBuffer) return;
-  await audio.startMusic(musicBuffer, { volume: parseFloat($('music-volume').value) });
-  setStatus($('music-status'), 'Music playing. Start a send or a broadcast loop to ride data on top of it.', 'ok');
+  if (audio.musicPlaying) {
+    audio.pauseMusic();
+    setStatus($('music-status'), `Music paused at ${clock(audio.musicPosition())}.${cast.on && !cast.paused ? ' The broadcast is still on air.' : ''}`, '');
+  } else {
+    audio.setMusicVolume(parseFloat($('music-volume').value));
+    if (audio.musicBuffer === musicBuffer) await audio.resumeMusic();
+    else await audio.startMusic(musicBuffer, { volume: parseFloat($('music-volume').value) });
+    relevelCast();
+    setStatus($('music-status'), cast.on ? 'Music playing.' : 'Music playing. Start a broadcast below to hide a message in it.', 'ok');
+  }
+  renderMusic();
 });
 
 $('btn-music-stop').addEventListener('click', () => {
   audio.stopMusic();
   setStatus($('music-status'), 'Music stopped.', '');
+  renderMusic();
+});
+
+$('music-seek').addEventListener('input', (e) => {
+  seeking = true;
+  $('music-time').textContent = clock(parseFloat(e.target.value));
+});
+
+$('music-seek').addEventListener('change', async (e) => {
+  await audio.seekMusic(parseFloat(e.target.value));
+  seeking = false;
+  renderMusic();
 });
 
 $('music-volume').addEventListener('input', (e) => audio.setMusicVolume(parseFloat(e.target.value)));
 
-$('btn-stealth').addEventListener('click', () => {
-  $('profile-select').value = 'stealth';
-  $('profile-select').dispatchEvent(new Event('change'));
-  setStatus($('music-status'), 'Stealth profile on. The receiving device must select Stealth too.', 'ok');
+$('btn-cast').addEventListener('click', async () => {
+  if (cast.on) {
+    if (cast.paused) resumeBroadcast();
+    else pauseBroadcast();
+    return;
+  }
+  try {
+    const choice = $('cast-mode').value;
+    const mode = choice === 'profile' ? state.profile : choice;
+    const text = $('cast-text').value;
+    const send = text.trim() ? textToSend(text, mode) : await buildFrames(mode);
+    await runBroadcast(send);
+  } catch (err) {
+    setStatus($('cast-status'), err.message, 'error');
+  }
 });
+
+$('btn-cast-stop').addEventListener('click', stopBroadcast);
+
+setInterval(() => {
+  if (musicBuffer) renderMusic();
+}, 250);
 
 /* ---------------------------------------------------------------- codes */
 
@@ -758,5 +954,7 @@ const linkUi = initLinkUi({
 });
 
 renderProfileInfo();
+renderCast();
+renderMusic();
 setStatus($('send-status'), 'Ready.', '');
 $('device-info').textContent = 'not started';

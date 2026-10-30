@@ -117,6 +117,10 @@
         <h2>Listen</h2>
         <div class="row actions">
           <button id="btn-listen" class="primary">Start listening</button>
+          <label class="inline" title="Off: only the profile chosen at the top">
+            <input type="checkbox" id="listen-any" checked />
+            Hear every mode
+          </label>
           <label class="inline">
             Squelch
             <input type="range" id="squelch" min="0.00005" max="0.4" step="0.00005" value="0.00005" />
@@ -227,44 +231,81 @@
       <section class="panel" id="panel-music">
         <h2>Music carrier</h2>
         <p class="hint">
-          Play any track and the data rides along inside it. The tones sit above the music in the
-          same audio, so a phone across the room can decode the payload while everyone still hears
-          the song.
+          Play any track and hide a message inside it. Everyone in the room hears the song; a phone
+          running Tonedrop on <b>Listen</b> reads the message. The music and the broadcast play and
+          pause on their own.
         </p>
-        <div class="row">
-          <input type="file" id="music-file" accept="audio/*" />
-          <button id="btn-music-play" class="primary" disabled>Play</button>
-          <button id="btn-music-stop" class="danger">Stop music</button>
+
+        <div class="player">
+          <div class="deck" id="deck">
+            <div class="disc" id="disc" aria-hidden="true">
+              <div class="disc-label"><span id="disc-label">♪</span></div>
+            </div>
+            <div class="tonearm" aria-hidden="true"></div>
+            <span class="onair-badge">On air</span>
+          </div>
+          <div class="player-body">
+            <div class="track-name" id="track-name">No track loaded</div>
+            <input type="file" id="music-file" accept="audio/*" aria-label="Choose a track" />
+            <div class="seek-row">
+              <span class="time" id="music-time">0:00</span>
+              <input type="range" id="music-seek" min="0" max="1" step="0.1" value="0" disabled aria-label="Position in the track" />
+              <span class="time" id="music-duration">0:00</span>
+            </div>
+            <div class="row actions">
+              <button id="btn-music-play" class="primary" disabled>Play music</button>
+              <button id="btn-music-stop" class="danger" disabled>Stop music</button>
+            </div>
+            <label class="inline">
+              Music level
+              <input type="range" id="music-volume" min="0" max="1" step="0.01" value="0.5" />
+            </label>
+            <div class="status" id="music-status">No music loaded.</div>
+          </div>
         </div>
+
+        <h3>Hidden broadcast</h3>
+        <label for="cast-text">Message to hide in the music</label>
+        <textarea id="cast-text" rows="2" placeholder="Leave empty to broadcast what is set up on the Send tab — text, a file or bytes"></textarea>
         <div class="row options">
           <label class="inline">
-            Music level
-            <input type="range" id="music-volume" min="0" max="1" step="0.01" value="0.5" />
+            <span class="nowrap">Hide as</span>
+            <select id="cast-mode">
+              <option value="stealth">Stealth — inaudible, 17–18.6 kHz (recommended)</option>
+              <option value="wave-ultra">Wave Ultra — inaudible, faster, needs 20 kHz speakers</option>
+              <option value="profile">The profile chosen at the top</option>
+            </select>
           </label>
           <label class="inline">
             Data level
             <input type="range" id="data-volume" min="0.05" max="1" step="0.01" value="0.35" />
           </label>
         </div>
-        <div class="status" id="music-status">No music loaded.</div>
-        <ol class="steps">
-          <li>Pick a track and press Play.</li>
-          <li>Go to <b>Send</b>, choose Text or File, then press <b>Broadcast loop</b>.</li>
-          <li>On the other device open <b>Listen</b> and hold it near the speaker.</li>
-        </ol>
-        <h3>Stealth</h3>
-        <p class="hint">
-          The Stealth profile moves the data to 17–18.6 kHz: above what most adults can hear, and above
-          almost everything in recorded music, so the song plays as normal and nobody hears the message.
-          Wave Ultra hides the same way at 17.5–20.5 kHz and carries far more per second, but needs gear
-          that reaches 20 kHz. Both devices must pick the same mode, and the music is never dipped while
-          either sends. It needs a speaker
-          and microphone that reach that high — most phones and laptops do, some cheap ones do not — and
-          children, pets and some young adults may still hear a faint whine.
-        </p>
-        <div class="row">
-          <button id="btn-stealth" class="ghost">Switch to Stealth</button>
+        <div class="row actions">
+          <button id="btn-cast" class="primary">Start broadcast</button>
+          <button id="btn-cast-stop" class="danger" disabled>Stop broadcast</button>
         </div>
+        <div class="status" id="cast-status">Broadcast off.</div>
+        <ol class="steps">
+          <li>Pick a track and press <b>Play music</b>.</li>
+          <li>Type a message (or set one up on <b>Send</b>) and press <b>Start broadcast</b>. Pause
+            either one whenever you like; the other keeps going.</li>
+          <li>On the other device open <b>Listen</b> with <b>Hear every mode</b> on and hold it near
+            the speaker.</li>
+        </ol>
+        <h3>Why Stealth</h3>
+        <p class="hint">
+          Stealth moves the data to 17–18.6 kHz: above what most adults can hear, and above almost
+          everything in recorded music. It is one steady tone at a time that glides from note to note,
+          so even a small speaker pushed hard has nothing to rattle into the audible range. Wave Ultra
+          hides at 17.5–20.5 kHz and carries far more per second, but it sounds hundreds of tones at
+          once; a phone speaker driven hard turns their beating into a faint hiss you can hear in
+          quiet passages. Neither dips the music. When the song is too loud to leave room for the
+          data, its level is held a little lower for as long as the broadcast runs, because clipping
+          the two together would crackle. It needs a speaker and microphone that reach that high —
+          most phones and laptops do, some cheap ones do not — and children, pets and some young
+          adults may still hear a faint whine.
+        </p>
         <p class="hint">
           Honest limits: louder, denser music makes the tones harder to hear, so raise the data
           level or leave ducking on. This survives music at ordinary listening levels, not a
