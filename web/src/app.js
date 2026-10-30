@@ -96,12 +96,21 @@ function sleep(ms) {
 
 for (const tab of document.querySelectorAll('[data-panel]')) {
   tab.addEventListener('click', () => {
+    const bar = tab.parentElement;
+    const stuck = bar.getBoundingClientRect().top <= 0;
     for (const other of document.querySelectorAll('[data-panel]')) {
       other.classList.toggle('active', other === tab);
     }
     for (const panel of document.querySelectorAll('.panel')) {
       panel.classList.toggle('active', panel.id === `panel-${tab.dataset.panel}`);
     }
+    /* Centre the tab in the strip. scrollIntoView would also scroll the page,
+     * because the strip is sticky. */
+    const t = tab.getBoundingClientRect();
+    const b = bar.getBoundingClientRect();
+    if (t.left < b.left || t.right > b.right) bar.scrollLeft += t.left - b.left - (b.width - t.width) / 2;
+    /* Down the page, the new panel should start just under the stuck bar. */
+    if (stuck) document.querySelector('main').scrollIntoView();
   });
 }
 
@@ -113,6 +122,42 @@ for (const tab of document.querySelectorAll('[data-sendmode]')) {
     for (const pane of document.querySelectorAll('.send-pane')) {
       pane.classList.toggle('active', pane.id === `send-${tab.dataset.sendmode}`);
     }
+  });
+}
+
+/* Every tab strip follows the ARIA tabs pattern: only the selected tab is in
+ * the Tab order, and the arrow keys, Home and End move between tabs. */
+function syncTabs(list) {
+  for (const tab of list.querySelectorAll('[role=tab]')) {
+    const on = tab.classList.contains('active');
+    tab.setAttribute('aria-selected', on);
+    tab.tabIndex = on ? 0 : -1;
+  }
+}
+
+for (const list of document.querySelectorAll('.tabs, .sub-tabs')) {
+  list.setAttribute('role', 'tablist');
+  for (const tab of list.querySelectorAll('button')) {
+    tab.setAttribute('role', 'tab');
+    const target = tab.dataset.panel ? `panel-${tab.dataset.panel}` : tab.dataset.sendmode ? `send-${tab.dataset.sendmode}` : null;
+    if (!target) continue;
+    tab.id = `tab-${target}`;
+    tab.setAttribute('aria-controls', target);
+    $(target).setAttribute('role', 'tabpanel');
+    $(target).setAttribute('aria-labelledby', tab.id);
+  }
+  syncTabs(list);
+  /* Bubbles after the tab's own handler, so .active is already moved. */
+  list.addEventListener('click', () => syncTabs(list));
+  list.addEventListener('keydown', (e) => {
+    const tabs = [...list.querySelectorAll('[role=tab]')];
+    const at = tabs.indexOf(document.activeElement);
+    const to = { ArrowRight: at + 1, ArrowLeft: at - 1, Home: 0, End: tabs.length - 1 }[e.key];
+    if (at < 0 || to === undefined) return;
+    e.preventDefault();
+    const next = tabs[(to + tabs.length) % tabs.length];
+    next.focus();
+    next.click();
   });
 }
 
@@ -593,7 +638,7 @@ function drawSpectrum() {
   const height = canvas.height;
   const spectrum = state.listening ? audio.listenSpectrum() : audio.transmitSpectrum();
   ctx2d.clearRect(0, 0, width, height);
-  ctx2d.fillStyle = '#0b1020';
+  ctx2d.fillStyle = '#131416';
   ctx2d.fillRect(0, 0, width, height);
 
   const p = profile();
@@ -604,7 +649,7 @@ function drawSpectrum() {
 
   /* Tone grid for the active profile; band edges for Wave. */
   const grid = wave ? [p.fLow, p.fHigh] : Array.from({ length: toneCount(p) }, (_, i) => toneFreq(p, i));
-  ctx2d.strokeStyle = 'rgba(120, 200, 255, 0.22)';
+  ctx2d.strokeStyle = 'rgba(255, 178, 36, 0.35)';
   ctx2d.lineWidth = 1;
   for (const hz of grid) {
     const x = xFor(hz);
@@ -619,7 +664,7 @@ function drawSpectrum() {
     const { data, sampleRate, fftSize } = spectrum;
     const bins = data.length;
     const nyquist = sampleRate / 2;
-    ctx2d.fillStyle = '#4ade80';
+    ctx2d.fillStyle = 'rgba(238, 236, 230, 0.85)';
     for (let x = 0; x < width; x++) {
       const hz = minHz + (x / width) * (maxHz - minHz);
       const bin = Math.round((hz / nyquist) * bins);
@@ -630,7 +675,7 @@ function drawSpectrum() {
     }
   }
 
-  ctx2d.fillStyle = 'rgba(148, 163, 184, 0.9)';
+  ctx2d.fillStyle = 'rgba(165, 163, 155, 0.9)';
   ctx2d.font = '11px ui-monospace, monospace';
   ctx2d.fillText(`${minHz} Hz`, 4, 12);
   ctx2d.fillText(`${Math.round(maxHz)} Hz`, width - 54, 12);
@@ -726,6 +771,66 @@ $('music-seek').addEventListener('change', async (e) => {
   await audio.seekMusic(parseFloat(e.target.value));
   seeking = false;
   renderMusic();
+});
+
+/* The record plays like one: tap it to play or pause, turn it to scrub. */
+const SECONDS_PER_TURN = 15;
+let spin = null;
+let discAngle = 0;
+
+const angleOnDisc = (e) => {
+  const r = $('disc').getBoundingClientRect();
+  return Math.atan2(e.clientY - (r.top + r.height / 2), e.clientX - (r.left + r.width / 2));
+};
+
+async function seekTo(seconds) {
+  const at = Math.max(0, Math.min(musicBuffer.duration, seconds));
+  await audio.seekMusic(at);
+  seeking = false;
+  renderMusic();
+}
+
+$('deck').addEventListener('pointerdown', (e) => {
+  if (!musicBuffer) return;
+  $('deck').setPointerCapture(e.pointerId);
+  spin = { last: angleOnDisc(e), turned: 0, from: audio.musicPosition() };
+});
+
+$('deck').addEventListener('pointermove', (e) => {
+  if (!spin) return;
+  const a = angleOnDisc(e);
+  const d = ((a - spin.last + 3 * Math.PI) % (2 * Math.PI)) - Math.PI;
+  spin.last = a;
+  spin.turned += d;
+  /* Under a few degrees it is still a tap. */
+  if (!seeking && Math.abs(spin.turned) < 0.15) return;
+  seeking = true;
+  discAngle += (d * 180) / Math.PI;
+  $('disc').style.rotate = `${discAngle}deg`;
+  const at = Math.max(0, Math.min(musicBuffer.duration, spin.from + (spin.turned / (2 * Math.PI)) * SECONDS_PER_TURN));
+  $('music-seek').value = at;
+  $('music-time').textContent = clock(at);
+});
+
+$('deck').addEventListener('pointerup', () => {
+  if (!spin) return;
+  spin = null;
+  if (seeking) seekTo(parseFloat($('music-seek').value));
+  else $('btn-music-play').click();
+});
+
+$('deck').addEventListener('pointercancel', () => {
+  spin = null;
+  seeking = false;
+});
+
+$('deck').addEventListener('keydown', (e) => {
+  if (!musicBuffer) return;
+  if (e.key === 'Enter' || e.key === ' ') $('btn-music-play').click();
+  else if (e.key === 'ArrowRight') seekTo(audio.musicPosition() + 5);
+  else if (e.key === 'ArrowLeft') seekTo(audio.musicPosition() - 5);
+  else return;
+  e.preventDefault();
 });
 
 $('music-volume').addEventListener('input', (e) => audio.setMusicVolume(parseFloat(e.target.value)));
