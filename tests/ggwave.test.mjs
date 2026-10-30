@@ -114,3 +114,19 @@ test('gibberlink framing: XY$message with a two-character sender', () => {
   assert.equal(fromGibberlink('plain text'), null);
   assert.equal(fromGibberlink('a$too short'), null);
 });
+
+/* Laptops and some phones capture at 44.1 kHz while gibberlink agents send at
+ * 48 kHz. ggwave was once set to work at the capture rate, which moved its
+ * tone grid: a 44.1 kHz device heard no gibberlink agent and no Link hello. */
+test('a device capturing at 44.1 kHz hears a gibberlink agent sending at 48 kHz, and is heard back', async () => {
+  const { resampleAll } = await import('../web/src/wave.js');
+  const text = toGibberlink('is it better now?', 'K9');
+  for (const protocol of ['gg-normal', 'gg-fast', 'gg-fastest']) {
+    const agent = await ggEncode(text, { protocol, fs: 48000 });
+    const heard = await decodeAll(withSilence(resampleAll(agent, 44100 / 48000), 44100), 44100);
+    assert.deepEqual(heard.map((b) => new TextDecoder().decode(b)), [text], `${protocol}: agent to 44.1 kHz device`);
+    const reply = await ggEncode(text, { protocol, fs: 44100 });
+    const back = await decodeAll(withSilence(resampleAll(reply, 48000 / 44100), 48000), 48000);
+    assert.deepEqual(back.map((b) => new TextDecoder().decode(b)), [text], `${protocol}: 44.1 kHz device to agent`);
+  }
+});
