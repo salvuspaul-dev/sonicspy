@@ -202,17 +202,23 @@ export function nextPow2(n) {
 /* Streaming Lanczos resampler; `ratio` is output rate over input rate. Linear
  * interpolation would lose several dB at 20 kHz, the inaudible mode's band.
  * ponytail: no anti-alias filter when downsampling; fine between 44.1 and
- * 48 kHz, add one before supporting rates whose Nyquist cuts into a band. */
+ * 48 kHz, add one before supporting rates whose Nyquist cuts into a band.
+ * `beta` swaps the Lanczos window for a Kaiser one. Sending Wave Ultra at
+ * 44.1 kHz needs it: Lanczos-8 lets the band's image at 27.5-30.5 kHz through
+ * at about -40 dB, and it folds down to an audible 13.6-16.6 kHz. */
 export class Resampler {
-  constructor(ratio, lobes = 8) {
+  constructor(ratio, lobes = 8, beta = 0) {
     this.step = 1 / ratio;
     this.lobes = lobes;
     this.hist = new Float32Array(0);
     this.t = 0;
-    this.kernel = new Float32Array(2 * lobes * KERNEL_TABLE + 1);
+    this.kernel = new Float32Array(2 * lobes * KERNEL_TABLE + 2);
     for (let i = 0; i < this.kernel.length; i++) {
       const x = i / KERNEL_TABLE - lobes;
-      this.kernel[i] = x === 0 ? 1 : (lobes * Math.sin(Math.PI * x) * Math.sin((Math.PI * x) / lobes)) / (Math.PI * Math.PI * x * x);
+      if (Math.abs(x) >= lobes) continue;
+      const sinc = x === 0 ? 1 : Math.sin(Math.PI * x) / (Math.PI * x);
+      const lanczos = x === 0 ? 1 : Math.sin((Math.PI * x) / lobes) / ((Math.PI * x) / lobes);
+      this.kernel[i] = sinc * (beta > 0 ? besselI0(beta * Math.sqrt(1 - (x / lobes) ** 2)) / besselI0(beta) : lanczos);
     }
   }
 
@@ -227,7 +233,11 @@ export class Resampler {
       const base = Math.floor(this.t);
       let acc = 0;
       for (let k = Math.max(0, base - A + 1); k <= base + A; k++) {
-        acc += x[k] * this.kernel[Math.round((this.t - k + A) * KERNEL_TABLE)];
+        /* Rounding to the nearest table entry jitters the kernel, which sprays
+         * a 17.5 kHz tone into the audible band at about -52 dB. */
+        const pos = (this.t - k + A) * KERNEL_TABLE;
+        const i = Math.floor(pos);
+        acc += x[k] * (this.kernel[i] + (pos - i) * (this.kernel[i + 1] - this.kernel[i]));
       }
       out[n++] = acc;
       this.t += this.step;
@@ -244,9 +254,19 @@ export class Resampler {
   }
 }
 
-export function resampleAll(samples, ratio) {
+function besselI0(x) {
+  let sum = 1;
+  let term = 1;
+  for (let k = 1; k < 40; k++) {
+    term *= (x / (2 * k)) ** 2;
+    sum += term;
+  }
+  return sum;
+}
+
+export function resampleAll(samples, ratio, lobes = 8, beta = 0) {
   if (ratio === 1) return samples;
-  const r = new Resampler(ratio);
+  const r = new Resampler(ratio, lobes, beta);
   const head = r.process(samples);
   const tail = r.flush();
   const out = new Float32Array(Math.round(samples.length * ratio));
@@ -621,7 +641,7 @@ export function modulateWave(frames, opts) {
     at += p.length;
   }
   const fs = opts.fs ?? WAVE_FS;
-  return fs === WAVE_FS ? all : resampleAll(all, fs / WAVE_FS);
+  return fs === WAVE_FS ? all : resampleAll(all, fs / WAVE_FS, 24, 9);
 }
 
 /* ---------- receiver ---------- */

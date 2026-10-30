@@ -132,3 +132,23 @@ export function channel(signal, {
   }
   return x;
 }
+
+/* Share of a signal's power below `hz`, in dB, from Hann-windowed spectra
+ * averaged over the whole signal: how much of an inaudible mode a listener
+ * could hear. */
+export function powerBelowDb(x, fs, hz, size = 8192) {
+  const win = Float64Array.from({ length: size }, (_, n) => 0.5 - 0.5 * Math.cos((2 * Math.PI * n) / size));
+  let below = 0;
+  let total = 0;
+  for (let at = 0; at + size <= x.length; at += size >> 1) {
+    const re = Float64Array.from({ length: size }, (_, n) => x[at + n] * win[n]);
+    const im = new Float64Array(size);
+    fft(re, im);
+    for (let k = 1; k < size >> 1; k++) {
+      const p = re[k] * re[k] + im[k] * im[k];
+      total += p;
+      if ((k * fs) / size < hz) below += p;
+    }
+  }
+  return 10 * Math.log10(below / total + 1e-30);
+}

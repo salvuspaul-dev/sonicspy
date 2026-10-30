@@ -32,6 +32,7 @@ import {
   Reassembler,
   FLAG_BINARY,
 } from '../web/src/protocol.js';
+import { powerBelowDb } from '../tools/channel.mjs';
 
 const FS = 48000;
 
@@ -427,5 +428,16 @@ test('[stealth] decodes under a song 20 dB louder than the data, with hiss', () 
     const { frames } = decodeOnce(mixed, PROFILES.stealth, 0.02);
     assert.ok(frames.length >= 1, `seed ${seed}: frame lost under the music`);
     assert.deepEqual([...frames[0]], [...frame]);
+  }
+});
+
+/* A hard jump between two tones sprays a click across the spectrum. At
+ * stealth's 17-18.6 kHz that put about -47 dB of its power below 15 kHz, where
+ * the ear is tens of dB keener, so the data was heard over quiet passages. */
+test('[stealth] keeps its power out of the audible band at either output rate', () => {
+  const { frames } = framesForText('the quick brown fox jumps over the lazy dog 0123456789', { chunkBytes: 64 });
+  for (const fs of [48000, 44100]) {
+    const leak = powerBelowDb(modulateFrames(frames, { fs, profile: PROFILES.stealth }), fs, 15000);
+    assert.ok(leak < -80, `${fs} Hz: ${leak.toFixed(1)} dB below 15 kHz`);
   }
 });

@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 
 import { chooseRate, demodulateWaveAll, fft, layout, MODCODS, modulateWave, Resampler, WaveDemodulator } from '../web/src/wave.js';
 import { framesForMessage } from '../web/src/protocol.js';
-import { biquad, channel, rms, rng, roomImpulse } from '../tools/channel.mjs';
+import { biquad, channel, powerBelowDb, rms, rng, roomImpulse } from '../tools/channel.mjs';
 
 const same = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
 const message = (n, seed = 1) => {
@@ -222,23 +222,16 @@ test('noise, hum and silence produce no frames', () => {
   }
 });
 
-test('wave-ultra keeps its energy out of the audible band', () => {
-  const audio = modulateWave(framesOf(400, 200, 8), { profile: 'wave-ultra' });
-  const N = 1 << 14;
-  let audible = 0;
-  let total = 0;
-  for (let at = 0; at + N <= audio.length; at += N) {
-    const re = Float64Array.from(audio.subarray(at, at + N), (v, i) => v * (0.5 - 0.5 * Math.cos((2 * Math.PI * i) / N)));
-    const im = new Float64Array(N);
-    fft(re, im);
-    for (let k = 1; k < N / 2; k++) {
-      const p = re[k] * re[k] + im[k] * im[k];
-      total += p;
-      if ((k * 48000) / N < 16000) audible += p;
-    }
+/* At 44.1 kHz the band is resampled on the way out. Lanczos-8 let its image
+ * at 27.5-30.5 kHz fold back to 13.6-16.6 kHz at about -46 dB of the signal,
+ * and rounding to the kernel table added a broadband hiss: an audible whine
+ * from the inaudible mode on every 44.1 kHz device. */
+test('wave-ultra keeps its energy out of the audible band at either output rate', () => {
+  const frames = framesOf(400, 200, 8);
+  for (const fs of [48000, 44100]) {
+    const leak = powerBelowDb(modulateWave(frames, { profile: 'wave-ultra', fs }), fs, 15000);
+    assert.ok(leak < -80, `${fs} Hz: ${leak.toFixed(1)} dB below 15 kHz`);
   }
-  const db = 10 * Math.log10(audible / total);
-  assert.ok(db < -40, `audible share ${db.toFixed(1)} dB`);
 });
 
 /* The music carrier plays a song and the data from one speaker. A stand-in
