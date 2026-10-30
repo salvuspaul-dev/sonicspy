@@ -7,6 +7,8 @@
  * protocols, where XY is a random two-character sender id used to drop echo.
  */
 
+import { Resampler, resampleAll } from './wave.js';
+
 export const GG_PROTOCOLS = {
   'gg-normal': { id: 0, label: 'ggwave audible, normal' },
   'gg-fast': { id: 1, label: 'ggwave audible, fast (gibberlink)' },
@@ -62,13 +64,17 @@ export function loadGgwave() {
 
 /* ggwave keeps at most four instances alive (GGWAVE_MAX_INSTANCES), so
  * encoding borrows one and gives it straight back, leaving room for the live
- * receiver. */
-function instance(gg, fs) {
-  const p = gg.getDefaultParameters();
-  p.sampleRateInp = fs;
-  p.sampleRateOut = fs;
-  p.sampleRate = fs;
-  const inst = gg.init(p);
+ * receiver.
+ *
+ * ggwave always runs at its own 48 kHz, and audio at any other rate is
+ * resampled on the way in and out here. Set to 44.1 kHz, its tone grid moved
+ * with the rate, so a 44.1 kHz device heard no gibberlink agent and no Link
+ * hello; and its own input resampler needs blocks of a fractional number of
+ * samples, so it lost messages at some alignments. */
+const GG_FS = 48000;
+
+function instance(gg) {
+  const inst = gg.init(gg.getDefaultParameters());
   if (inst < 0) throw new Error('ggwave has no free instance; close a decoder first');
   return inst;
 }
@@ -77,10 +83,10 @@ function instance(gg, fs) {
  * whole number of its 1024-sample frames. */
 const FRAME = 1024;
 
-function decodeAt(gg, samples, fs, offset) {
-  const inst = instance(gg, fs);
+function decodeAt(gg, samples, offset) {
+  const inst = instance(gg);
   try {
-    const all = new Float32Array(Math.ceil((offset + samples.length + fs / 2) / FRAME) * FRAME);
+    const all = new Float32Array(Math.ceil((offset + samples.length + GG_FS / 2) / FRAME) * FRAME);
     all.set(samples, offset);
     let found = null;
     for (let i = 0; i < all.length; i += 4 * FRAME) {
@@ -111,7 +117,7 @@ export async function ggEncode(payload, { protocol = 'gg-fast', fs = 48000 } = {
     throw new RangeError(`ggwave carries at most ${GG_MAX_BYTES} bytes per message; this is ${bytes.length}`);
   }
   const gg = await loadGgwave();
-  const inst = instance(gg, fs);
+  const inst = instance(gg);
   let samples;
   try {
     /* The result is a view into wasm memory that the next call overwrites. */
@@ -121,9 +127,9 @@ export async function ggEncode(payload, { protocol = 'gg-fast', fs = 48000 } = {
     gg.free(inst);
   }
   for (const offset of CHECK_OFFSETS) {
-    if (!sameBytes(decodeAt(gg, samples, fs, offset), bytes)) throw new GgwaveUnreliableError(protocol);
+    if (!sameBytes(decodeAt(gg, samples, offset), bytes)) throw new GgwaveUnreliableError(protocol);
   }
-  return samples;
+  return fs === GG_FS ? samples : resampleAll(samples, fs / GG_FS, 24, 9);
 }
 
 export class GgwaveUnreliableError extends Error {
@@ -138,19 +144,21 @@ export class GgwaveUnreliableError extends Error {
 export class GgwaveDecoder {
   static async create({ fs, onMessage }) {
     const gg = await loadGgwave();
-    return new GgwaveDecoder(gg, instance(gg, fs), onMessage);
+    return new GgwaveDecoder(gg, instance(gg), onMessage, fs);
   }
 
-  constructor(gg, inst, onMessage) {
+  constructor(gg, inst, onMessage, fs = GG_FS) {
     this.gg = gg;
     this.inst = inst;
     this.onMessage = onMessage ?? (() => {});
     this.pending = new Float32Array(0);
+    this.resampler = fs === GG_FS ? null : new Resampler(GG_FS / fs);
   }
 
   /* Any chunk size in; whole frames out to ggwave, the rest kept for next time. */
   push(samples) {
     if (this.inst === null) return;
+    if (this.resampler) samples = this.resampler.process(samples);
     const all = new Float32Array(this.pending.length + samples.length);
     all.set(this.pending);
     all.set(samples, this.pending.length);
