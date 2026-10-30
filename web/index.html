@@ -4,17 +4,28 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="color-scheme" content="dark" />
-    <title>Tonedrop — data over sound</title>
+    <meta name="theme-color" content="#1a1b1e" />
+    <title>Tonedrop: data over sound</title>
     <link
       rel="icon"
-      href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23070b16'/><g fill='%234ade80'><rect x='7' y='12' width='3' height='8' rx='1.5'/><rect x='12.5' y='8' width='3' height='16' rx='1.5'/><rect x='18' y='5' width='3' height='22' rx='1.5'/><rect x='23.5' y='11' width='3' height='10' rx='1.5'/></g></svg>"
+      href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%231a1b1e'/><g fill='%23ffb224'><rect x='7' y='12' width='3' height='8' rx='1.5'/><rect x='12.5' y='8' width='3' height='16' rx='1.5'/><rect x='18' y='5' width='3' height='22' rx='1.5'/><rect x='23.5' y='11' width='3' height='10' rx='1.5'/></g></svg>"
     />
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
     <header class="top">
       <div>
-        <h1>Tone<span>drop</span></h1>
+        <h1 class="wordmark">
+          <svg viewBox="0 0 32 32" aria-hidden="true" focusable="false">
+            <g fill="currentColor">
+              <rect x="3" y="12" width="4" height="8" rx="1" />
+              <rect x="10" y="7" width="4" height="18" rx="1" />
+              <rect x="17" y="3" width="4" height="26" rx="1" />
+              <rect x="24" y="10" width="4" height="12" rx="1" />
+            </g>
+          </svg>
+          Tonedrop
+        </h1>
         <p class="tagline">
           Send messages, files and raw data between devices using sound alone — no network, no
           pairing, no accounts. Tones carry the bytes; any speaker and microphone will do.
@@ -23,20 +34,20 @@
       <div class="profile-box">
         <label for="profile-select">Profile</label>
         <select id="profile-select">
-          <option value="wave">Wave — fastest, OFDM, any speaker</option>
-          <option value="wave-far">Wave Far — echoey rooms, distance</option>
-          <option value="wave-ultra">Wave Ultra — inaudible, 17.5–20.5 kHz</option>
-          <option value="robust">Robust — people, noisy rooms</option>
-          <option value="fast">Fast — agents and bytes</option>
-          <option value="turbo">Turbo — files, quiet room</option>
-          <option value="stealth">Stealth — inaudible, hides under music</option>
+          <option value="wave">Wave: fastest, OFDM, any speaker</option>
+          <option value="wave-far">Wave Far: echoey rooms, distance</option>
+          <option value="wave-ultra">Wave Ultra: inaudible, 17.5–20.5 kHz</option>
+          <option value="robust">Robust: people, noisy rooms</option>
+          <option value="fast">Fast: agents and bytes</option>
+          <option value="turbo">Turbo: files, quiet room</option>
+          <option value="stealth">Stealth: inaudible, hides under music</option>
         </select>
         <div class="profile-rate" id="profile-rate">—</div>
         <div class="profile-detail" id="profile-detail">—</div>
       </div>
     </header>
 
-    <nav class="tabs">
+    <nav class="tabs" aria-label="Sections">
       <button class="tab active" data-panel="send">Send</button>
       <button class="tab" data-panel="listen">Listen</button>
       <button class="tab" data-panel="link">Link</button>
@@ -103,7 +114,7 @@
           <button id="send-wav" class="ghost" disabled>Save as WAV</button>
         </div>
 
-        <div class="status" id="send-status">Ready.</div>
+        <div class="status" role="status" id="send-status">Ready.</div>
         <div class="eta" id="send-eta"></div>
         <p class="hint">
           The broadcast loop keeps a message on the air. Anyone who starts listening late still
@@ -127,12 +138,12 @@
           </label>
           <button id="btn-clear" class="ghost">Clear log</button>
         </div>
-        <div class="status" id="listen-status">Not listening.</div>
+        <div class="status" role="status" id="listen-status">Not listening.</div>
 
         <canvas id="spectrum" width="900" height="160"></canvas>
         <p class="hint">
-          Green is what the microphone hears, blue lines are the tones this profile uses. A
-          staircase walking across the lines is a message arriving.
+          The pale bars are what the microphone hears; the amber lines are the tones this profile
+          uses. A staircase walking across the lines is a message arriving.
         </p>
 
         <div class="stats">
@@ -162,13 +173,13 @@
           <label class="inline">
             Prefer
             <select id="link-mode">
-              <option value="wave">Wave — fastest, adapts its rate, confirms delivery</option>
-              <option value="wave-far">Wave Far — echoey rooms, distance</option>
-              <option value="wave-ultra">Wave Ultra — inaudible</option>
-              <option value="turbo">Turbo — MFSK, close range</option>
-              <option value="fast">Fast — agents and bytes</option>
-              <option value="robust">Robust — across a noisy room</option>
-              <option value="stealth">Stealth — near-ultrasonic</option>
+              <option value="wave">Wave: fastest, adapts its rate, confirms delivery</option>
+              <option value="wave-far">Wave Far: echoey rooms, distance</option>
+              <option value="wave-ultra">Wave Ultra: inaudible</option>
+              <option value="turbo">Turbo: MFSK, close range</option>
+              <option value="fast">Fast: agents and bytes</option>
+              <option value="robust">Robust: across a noisy room</option>
+              <option value="stealth">Stealth: near-ultrasonic</option>
             </select>
           </label>
           <label class="inline">
@@ -183,13 +194,13 @@
           <button id="btn-link-start" class="primary">Open link</button>
           <span class="hint" id="link-id"></span>
         </div>
-        <div class="status" id="link-status">Not connected.</div>
+        <div class="status" role="status" id="link-status">Not connected.</div>
 
         <label for="link-text">Message</label>
         <textarea id="link-text" rows="2" placeholder="Say something to whoever is listening…"></textarea>
         <div class="row actions">
           <button id="btn-link-say" class="primary">Send</button>
-          <input type="file" id="link-file" />
+          <input type="file" id="link-file" aria-label="File to send" />
           <button id="btn-link-file">Send file</button>
         </div>
 
@@ -213,18 +224,18 @@
           <label for="translate-file">Translate a recording</label>
           <input type="file" id="translate-file" accept="audio/*" />
         </div>
-        <div class="status" id="translate-status">Ready.</div>
+        <div class="status" role="status" id="translate-status">Ready.</div>
         <div class="hint" id="translate-live"></div>
         <div id="translate-log" class="messages chat"></div>
 
         <h3>Say it in any of them</h3>
-        <textarea id="translate-text" rows="2" placeholder="Type text to speak as Tonedrop, ggwave, Morse, DTMF or tap code…"></textarea>
+        <textarea id="translate-text" aria-label="Text to speak" rows="2" placeholder="Type text to speak as Tonedrop, ggwave, Morse, DTMF or tap code…"></textarea>
         <div class="row actions">
-          <select id="translate-as"></select>
+          <select id="translate-as" aria-label="Speak it as"></select>
           <button id="btn-translate-play" class="primary">Play</button>
           <button id="btn-translate-wav" class="ghost">Save as WAV</button>
         </div>
-        <div class="status" id="translate-say-status"></div>
+        <div class="status" role="status" id="translate-say-status"></div>
       </section>
 
       <!-- ------------------------------------------------------------ MUSIC -->
@@ -237,7 +248,7 @@
         </p>
 
         <div class="player">
-          <div class="deck" id="deck">
+          <div class="deck" id="deck" role="button" tabindex="0" aria-label="Record: tap to play or pause, turn it to scrub, arrow keys skip 5 seconds">
             <div class="disc" id="disc" aria-hidden="true">
               <div class="disc-label"><span id="disc-label">♪</span></div>
             </div>
@@ -260,7 +271,7 @@
               Music level
               <input type="range" id="music-volume" min="0" max="1" step="0.01" value="0.5" />
             </label>
-            <div class="status" id="music-status">No music loaded.</div>
+            <div class="status" role="status" id="music-status">No music loaded.</div>
           </div>
         </div>
 
@@ -271,8 +282,8 @@
           <label class="inline">
             <span class="nowrap">Hide as</span>
             <select id="cast-mode">
-              <option value="stealth">Stealth — inaudible, 17–18.6 kHz (recommended)</option>
-              <option value="wave-ultra">Wave Ultra — inaudible, faster, needs 20 kHz speakers</option>
+              <option value="stealth">Stealth: inaudible, 17–18.6 kHz (recommended)</option>
+              <option value="wave-ultra">Wave Ultra: inaudible, faster, needs 20 kHz speakers</option>
               <option value="profile">The profile chosen at the top</option>
             </select>
           </label>
@@ -285,7 +296,7 @@
           <button id="btn-cast" class="primary">Start broadcast</button>
           <button id="btn-cast-stop" class="danger" disabled>Stop broadcast</button>
         </div>
-        <div class="status" id="cast-status">Broadcast off.</div>
+        <div class="status" role="status" id="cast-status">Broadcast off.</div>
         <ol class="steps">
           <li>Pick a track and press <b>Play music</b>.</li>
           <li>Type a message (or set one up on <b>Send</b>) and press <b>Start broadcast</b>. Pause
@@ -359,7 +370,7 @@
           <input type="file" id="code-file" accept="audio/*" />
         </div>
 
-        <div class="status" id="code-status">Ready.</div>
+        <div class="status" role="status" id="code-status">Ready.</div>
         <h3>Heard</h3>
         <div class="messages"><div class="message-text" id="code-heard">Nothing yet.</div></div>
       </section>
@@ -439,10 +450,10 @@ node tools/tonedrop-cli.mjs translate --in recording.wav --json</pre>
           quickest way to confirm the link works on this hardware.
         </p>
         <div class="row">
-          <input type="text" id="selftest-text" value="tonedrop self test" />
+          <input type="text" id="selftest-text" aria-label="Self-test message" value="tonedrop self test" />
           <button id="btn-selftest" class="primary">Run self-test</button>
         </div>
-        <div id="selftest-result" class="selftest"></div>
+        <div id="selftest-result" class="selftest" role="status"></div>
 
         <h3>Tones for this profile</h3>
         <table class="spec" id="tone-table">
@@ -474,7 +485,7 @@ node tools/tonedrop-cli.mjs translate --in recording.wav --json</pre>
           final say.
         </p>
       </section>
-      <p class="hint"><a href="privacy.html">Privacy policy</a> · Nothing leaves this device except sound.</p>
+      <p class="hint">Nothing leaves this device except sound. <a href="privacy.html">Read the privacy policy</a>.</p>
     </main>
 
     <script type="module" src="src/app.js"></script>
