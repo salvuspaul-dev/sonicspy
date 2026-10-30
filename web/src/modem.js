@@ -282,6 +282,10 @@ function goertzelPower(x, offset, N, freq, fs) {
   return power > 0 ? power : 0;
 }
 
+/* Share of a symbol spent gliding to the next tone, half on each side. */
+const GLIDE_SHARE = 0.1875;
+const glideAt = (u, glide) => 0.5 - 0.5 * Math.cos((Math.PI * (u + 0.5)) / glide);
+
 /* Modulate a list of frames into one continuous Float32Array. Frames are
  * separated by a short silence so the receiver can finalise each one. */
 export function modulateFrames(frames, opts) {
@@ -305,11 +309,20 @@ export function modulateFrames(frames, opts) {
     for (let s = 0; s < data.length; s++) symbols[PREAMBLE_SYMBOLS + s] = dataTone(profile, s, data[s]);
 
     const out = new Float32Array(symbols.length * N + gapSamples);
+    /* The pitch glides from one tone to the next over a short raised-cosine
+     * step across each boundary. A hard jump splatters stealth's 17-18.6 kHz
+     * tones into the audible band at about -64 dB (1-4 kHz) and -37 dB
+     * (15-16.5 kHz), where the ear is far keener than at 18 kHz; the glide
+     * falls where the receiver's Hann window weighs almost nothing. */
+    const glide = Math.min(N >> 1, Math.round(N * GLIDE_SHARE)) & ~1;
+    const w = (s) => (2 * Math.PI * toneFreq(profile, symbols[Math.max(0, Math.min(symbols.length - 1, s))])) / fs;
     let phase = 0;
     for (let s = 0; s < symbols.length; s++) {
-      const w = (2 * Math.PI * toneFreq(profile, symbols[s])) / fs;
       for (let n = 0; n < N; n++) {
-        phase += w;
+        let step = w(s);
+        if (n < glide >> 1) step = w(s - 1) + (step - w(s - 1)) * glideAt(n + (glide >> 1), glide);
+        else if (n >= N - (glide >> 1)) step += (w(s + 1) - step) * glideAt(n - N + (glide >> 1), glide);
+        phase += step;
         out[s * N + n] = amp * Math.sin(phase);
       }
     }
