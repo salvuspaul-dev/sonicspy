@@ -32,9 +32,11 @@ test('solver rebuilds chunks from random combinations and spots dependent ones',
   s.solve().forEach((ch, i) => assert.deepEqual(ch, chunks[i]));
 });
 
+/* Which frames a loss pattern keeps independent depends on the message id, so
+ * ids are pinned: with a random one this failed about 1 run in 30. */
 test('any K-or-so surviving frames rebuild the message, systematic or not', () => {
   const data = bytes(5000, 3);
-  const { frames } = framesForBinary(data, { chunkBytes: 256 });
+  const { frames } = framesForBinary(data, { chunkBytes: 256, id: 0x5eed0003 });
   const K = frames.length;
   const all = onAir(frames, 3, { fountain: true });
   assert.equal(all.length, 3 * K);
@@ -52,7 +54,7 @@ test('fountain passes survive loss that defeats plain repeats', () => {
   let fountain = 0;
   for (let seed = 1; seed <= 40; seed++) {
     const data = bytes(4000, seed);
-    const { frames } = framesForBinary(data, { chunkBytes: 200 });
+    const { frames } = framesForBinary(data, { chunkBytes: 200, id: 0x5eed0000 + seed });
     const lose = (list) => {
       const rand = rng(seed * 31);
       return list.filter(() => rand() > 0.25);
