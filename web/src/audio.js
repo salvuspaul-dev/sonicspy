@@ -388,13 +388,6 @@ function loadCaptureWorklet(ctx) {
  * length is known. */
 const DROPOUT_SAMPLES = 256;
 
-/* Inaudible data has nothing to hide under a song, so it takes all the range the
- * song leaves free and never less than the chosen level: past full scale the sum
- * would click audibly. */
-export function headroomVolume(samples, songPeak, level) {
-  return Math.min(1, Math.max(level, (1 - songPeak) / peakOf(samples)));
-}
-
 /* The loudest gain a song peaking at `trackPeak` may play at while data
  * peaking at `dataPeak` shares the output, so the sum never passes full
  * scale. That holds whenever the chosen data level is more than the song's

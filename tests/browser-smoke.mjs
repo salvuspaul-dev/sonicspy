@@ -15,6 +15,7 @@ import { createRequire } from 'node:module';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { toWav } from '../web/src/audio.js';
 
 const require = createRequire(import.meta.url);
 const PLAYWRIGHT =
@@ -52,6 +53,15 @@ page.on('console', (msg) => {
 page.on('pageerror', (err) => consoleErrors.push(`pageerror: ${err.message}`));
 page.on('response', (res) => {
   if (res.status() >= 400) failedRequests.push(`${res.status()} ${res.url()}`);
+});
+/* The gain each data block plays at. The song loops; data blocks do not. */
+await page.addInitScript(() => {
+  window.__dataGains = [];
+  const connect = AudioBufferSourceNode.prototype.connect;
+  AudioBufferSourceNode.prototype.connect = function (to, ...rest) {
+    if (!this.loop && to instanceof GainNode) window.__dataGains.push(to.gain.value);
+    return connect.call(this, to, ...rest);
+  };
 });
 
 await page.goto(baseUrl, { waitUntil: 'networkidle' });
@@ -115,7 +125,30 @@ await page.waitForTimeout(1200);
 const listenStatus = await page.locator('#listen-status').innerText();
 notes.push(`microphone status in this environment: ${listenStatus}`);
 
-/* 9. Screenshot for the record. */
+/* 9. Under a song, every broadcast mode plays at the Data level slider. The
+ *    hidden bands are audible to some listeners, so the slider must reach them.
+ *    "profile" sends on the chosen profile, which step 6 left on Stealth. */
+await page.click('.tab[data-panel="diag"]');
+await page.selectOption('#profile-select', 'robust');
+await page.click('.tab[data-panel="music"]');
+const tone = Float32Array.from({ length: 48000 }, (_, i) => Math.sin((2 * Math.PI * 440 * i) / 48000));
+await page.setInputFiles('#music-file', { name: 'tone.wav', mimeType: 'audio/wav', buffer: Buffer.from(toWav(tone, 48000)) });
+await page.waitForFunction(() => !document.getElementById('btn-music-play').disabled);
+await page.click('#btn-music-play');
+await page.fill('#cast-text', 'level check');
+const level = parseFloat(await page.inputValue('#data-volume'));
+for (const mode of ['profile', 'stealth', 'wave-ultra']) {
+  await page.selectOption('#cast-mode', mode);
+  const before = await page.evaluate(() => window.__dataGains.length);
+  await page.click('#btn-cast');
+  await page.waitForFunction((n) => window.__dataGains.length > n, before);
+  const gain = await page.evaluate(() => window.__dataGains.at(-1));
+  await page.click('#btn-cast-stop');
+  check(`under a song, ${mode} broadcasts at the Data level`, Math.abs(gain - level) < 1e-6, `gain ${gain.toFixed(3)}, slider ${level}`);
+}
+await page.click('#btn-music-stop');
+
+/* 10. Screenshot for the record. */
 await page.click('.tab[data-panel="send"]');
 await mkdir(shotDir, { recursive: true });
 await page.screenshot({ path: join(shotDir, 'browser-send.png'), fullPage: true });

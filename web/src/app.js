@@ -40,7 +40,7 @@ import {
   formatBytes,
   payloadBytesPerSecond,
 } from './transfer.js';
-import { SonicAudio, headroomVolume, peakOf, songCeiling, toWav } from './audio.js';
+import { SonicAudio, peakOf, songCeiling, toWav } from './audio.js';
 import { CODES } from './codes.js';
 import { initLinkUi } from './ui-link.js';
 
@@ -422,8 +422,7 @@ async function transmitOnce({ frames, repeats, mode }, pass = 0) {
   /* The data level sets how audible data sits under a song; with no song it would
    * only throw range away. */
   const level = parseFloat($('data-volume').value);
-  const songPeak = audio.musicPeak * audio.musicBaseVolume;
-  const volume = !audio.musicPlaying ? 1 : inaudible ? headroomVolume(samples, songPeak, level) : level;
+  const volume = audio.musicPlaying ? level : 1;
   holdRoomFor(volume * peakOf(samples));
   await audio.playSamples(samples, { volume });
   if (wantsDuck) audio.duck(false);
