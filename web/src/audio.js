@@ -36,6 +36,7 @@ export class SonicAudio {
     this.transmitStartedAt = 0;
     this.transmitEndsAt = 0;
     this.transmitEpoch = 0;
+    this.listenEpoch = 0;
     this.musicBaseVolume = 0.5;
     this.musicCeiling = Infinity;
     this.musicBuffer = null;
@@ -88,14 +89,15 @@ export class SonicAudio {
     this.musicGain.gain.setTargetAtTime(this.musicLevel, now, 0.15);
   }
 
-  /* Play one modulated block. Resolves when it has finished sounding. */
+  /* Play one modulated block. Resolves when it has finished sounding: true if
+   * it played to its end, false if a stop or a newer block cut it short. */
   /* A new transmission replaces the one on air: two at once garble each other.
    * A stop that lands while the context is still starting cancels the block:
    * a broadcast paused at that moment would otherwise send a whole pass. */
   playSamples(samples, { volume = 1 } = {}) {
     const epoch = this.transmitEpoch;
     return this.context().then((ctx) => {
-      if (epoch !== this.transmitEpoch) return;
+      if (epoch !== this.transmitEpoch) return false;
       this.#endTransmitSource();
       const buffer = ctx.createBuffer(1, samples.length, ctx.sampleRate);
       buffer.copyToChannel(samples, 0);
@@ -109,8 +111,9 @@ export class SonicAudio {
       this.transmitEndsAt = ctx.currentTime + buffer.duration;
       return new Promise((resolve) => {
         source.onended = () => {
-          if (this.transmitSource === source) this.transmitSource = null;
-          resolve();
+          const finished = this.transmitSource === source;
+          if (finished) this.transmitSource = null;
+          resolve(finished);
         };
         source.start();
       });
@@ -123,13 +126,14 @@ export class SonicAudio {
   }
 
   #endTransmitSource() {
-    if (this.transmitSource) {
-      try {
-        this.transmitSource.stop();
-      } catch {
-        /* already stopped */
-      }
-      this.transmitSource = null;
+    const source = this.transmitSource;
+    if (!source) return;
+    /* Cleared first, so the source's `ended` reports a cut, not a finish. */
+    this.transmitSource = null;
+    try {
+      source.stop();
+    } catch {
+      /* already stopped */
     }
   }
 
@@ -151,19 +155,25 @@ export class SonicAudio {
     return ctx.decodeAudioData(bytes);
   }
 
+  /* Make `buffer` the loaded track, at its start, without playing it, so it
+   * can be scrubbed before the first play. */
+  cueMusic(buffer) {
+    if (this.musicBuffer === buffer) return;
+    this.musicBuffer = buffer;
+    this.musicOffset = 0;
+    this.musicPeak = 0;
+    for (let c = 0; c < buffer.numberOfChannels; c++) {
+      for (const v of buffer.getChannelData(c)) this.musicPeak = Math.max(this.musicPeak, Math.abs(v));
+    }
+  }
+
   /* Start music looping under the data signal, `offset` seconds in. Callers
    * drive the data transmission separately so the two can loop, and pause,
    * independently. */
   async startMusic(buffer, { volume = this.musicBaseVolume, offset = 0 } = {}) {
     const ctx = await this.context();
     this.#endMusicSource();
-    if (this.musicBuffer !== buffer) {
-      this.musicBuffer = buffer;
-      this.musicPeak = 0;
-      for (let c = 0; c < buffer.numberOfChannels; c++) {
-        for (const v of buffer.getChannelData(c)) this.musicPeak = Math.max(this.musicPeak, Math.abs(v));
-      }
-    }
+    this.cueMusic(buffer);
     const source = ctx.createBufferSource();
     source.buffer = buffer;
     source.loop = true;
@@ -236,13 +246,20 @@ export class SonicAudio {
 
   /* Start listening. `onSamples` receives mono Float32Array chunks. */
   async startListening(onSamples) {
+    const epoch = this.listenEpoch;
     const ctx = await this.context();
     const worklet = await loadCaptureWorklet(ctx);
     const stream = await navigator.mediaDevices.getUserMedia(MIC_CONSTRAINTS);
+    /* Stopped while the permission prompt, or a reopen, was pending: nobody
+     * is listening any more, so the microphone must not stay open. */
+    if (epoch !== this.listenEpoch) {
+      for (const track of stream.getTracks()) track.stop();
+      return ctx.sampleRate;
+    }
     /* A start that overlapped this one (a second tap while the permission
      * prompt was open) may already own a pipeline. Two pipelines would feed one
      * receiver interleaved chunks, and stopListening could only reach the last. */
-    this.stopListening();
+    this.#closeCapture();
     this.stream = stream;
     this.onSamples = onSamples;
     const source = ctx.createMediaStreamSource(stream);
@@ -308,6 +325,11 @@ export class SonicAudio {
   }
 
   stopListening() {
+    this.listenEpoch++;
+    this.#closeCapture();
+  }
+
+  #closeCapture() {
     if (this.processor) {
       if (this.processor.port) {
         this.processor.port.onmessage = null;
@@ -455,12 +477,14 @@ export function fromWav(arrayBuffer) {
   let sampleRate = 48000;
   let channels = 1;
   let bits = 16;
+  let format = 1;
   let dataAt = -1;
   let dataLen = 0;
   while (at + 8 <= view.byteLength) {
     const id = view.getUint32(at, false);
     const size = view.getUint32(at + 4, true);
     if (id === 0x666d7420) {
+      format = view.getUint16(at + 8, true);
       channels = view.getUint16(at + 10, true);
       sampleRate = view.getUint32(at + 12, true);
       bits = view.getUint16(at + 22, true);
@@ -471,12 +495,14 @@ export function fromWav(arrayBuffer) {
     at += 8 + size + (size % 2);
   }
   if (dataAt < 0) throw new Error('no data chunk');
+  /* 1 is PCM; 0xFFFE is the extensible header some tools write for PCM. */
+  if (bits !== 16 || (format !== 1 && format !== 0xfffe)) throw new Error('only 16-bit PCM WAV files are supported');
   const frameSize = (bits / 8) * channels;
   const frames = Math.floor(Math.min(dataLen, view.byteLength - dataAt) / frameSize);
   const out = new Float32Array(frames);
   for (let i = 0; i < frames; i++) {
     const pos = dataAt + i * frameSize;
-    out[i] = bits === 16 ? view.getInt16(pos, true) / 0x8000 : view.getInt8(pos) / 0x80;
+    out[i] = view.getInt16(pos, true) / 0x8000;
   }
   return { samples: out, sampleRate };
 }

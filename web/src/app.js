@@ -297,8 +297,7 @@ $('btn-send').addEventListener('click', async () => {
   try {
     pendingSend = await buildFrames();
     describeCost(pendingSend);
-    await transmitOnce(pendingSend);
-    setStatus($('send-status'), 'Transmitted.', 'ok');
+    if (await transmitOnce(pendingSend)) setStatus($('send-status'), 'Transmitted.', 'ok');
   } catch (err) {
     setStatus($('send-status'), err.message, 'error');
   }
@@ -418,13 +417,15 @@ async function transmitOnce({ frames, repeats, mode }, pass = 0) {
   const inaudible = ['stealth', 'wave-ultra'].includes(mode);
   /* Dipping the song would announce an inaudible transmission to every listener. */
   const wantsDuck = $('duck').checked && audio.musicPlaying && !inaudible;
-  if (wantsDuck) audio.duck(true);
   /* The data level sets how audible data sits under a song; with no song it would
    * only throw range away. */
   const level = parseFloat($('data-volume').value);
   const volume = audio.musicPlaying ? level : 1;
   holdRoomFor(volume * peakOf(samples));
-  await audio.playSamples(samples, { volume });
+  /* After the room is held: holding it reschedules the music gain, which
+   * would cancel a dip already under way. */
+  if (wantsDuck) audio.duck(true);
+  const played = await audio.playSamples(samples, { volume });
   if (wantsDuck) audio.duck(false);
   /* A loop keeps the room between passes, so the song does not pump. */
   if (!cast.on || cast.paused) audio.setMusicCeiling(Infinity);
@@ -433,6 +434,7 @@ async function transmitOnce({ frames, repeats, mode }, pass = 0) {
     const wav = toWav(samples, fs);
     download(wav, `tonedrop-${mode}.wav`, 'audio/wav');
   };
+  return played;
 }
 
 $('btn-random').addEventListener('click', () => {
@@ -718,6 +720,7 @@ $('music-file').addEventListener('change', async (e) => {
     const buffer = await audio.loadMusic(file);
     audio.stopMusic();
     musicBuffer = buffer;
+    audio.cueMusic(buffer);
     const name = file.name.replace(/\.[^.]+$/, '');
     $('track-name').textContent = name;
     $('disc-label').textContent = name;
@@ -914,8 +917,7 @@ $('btn-code-play').addEventListener('click', async () => {
   try {
     const { fs, samples } = await codeAudio();
     setStatus($('code-status'), `Playing ${CODES[codeState.kind].label} (${formatDuration(samples.length / fs)})…`, '');
-    await audio.playSamples(samples);
-    setStatus($('code-status'), 'Done.', 'ok');
+    if (await audio.playSamples(samples)) setStatus($('code-status'), 'Done.', 'ok');
   } catch (err) {
     setStatus($('code-status'), err.message, 'error');
   }

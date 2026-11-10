@@ -54,13 +54,31 @@ page.on('pageerror', (err) => consoleErrors.push(`pageerror: ${err.message}`));
 page.on('response', (res) => {
   if (res.status() >= 400) failedRequests.push(`${res.status()} ${res.url()}`);
 });
-/* The gain each data block plays at. The song loops; data blocks do not. */
+/* The gain each data block plays at, and where the song's own gain was heading
+ * when the block started. The song loops; data blocks do not. Only the song's
+ * gain is ever ramped, and each start of the song records its offset. */
 await page.addInitScript(() => {
   window.__dataGains = [];
+  window.__songTargets = [];
+  window.__songStarts = [];
+  let songTarget = null;
+  const setTarget = AudioParam.prototype.setTargetAtTime;
+  AudioParam.prototype.setTargetAtTime = function (target, ...rest) {
+    songTarget = target;
+    return setTarget.call(this, target, ...rest);
+  };
   const connect = AudioBufferSourceNode.prototype.connect;
   AudioBufferSourceNode.prototype.connect = function (to, ...rest) {
-    if (!this.loop && to instanceof GainNode) window.__dataGains.push(to.gain.value);
+    if (!this.loop && to instanceof GainNode) {
+      window.__dataGains.push(to.gain.value);
+      window.__songTargets.push(songTarget);
+    }
     return connect.call(this, to, ...rest);
+  };
+  const start = AudioBufferSourceNode.prototype.start;
+  AudioBufferSourceNode.prototype.start = function (...args) {
+    if (this.loop) window.__songStarts.push(args[1] ?? 0);
+    return start.apply(this, args);
   };
 });
 
@@ -134,7 +152,15 @@ await page.click('.tab[data-panel="music"]');
 const tone = Float32Array.from({ length: 48000 }, (_, i) => Math.sin((2 * Math.PI * 440 * i) / 48000));
 await page.setInputFiles('#music-file', { name: 'tone.wav', mimeType: 'audio/wav', buffer: Buffer.from(toWav(tone, 48000)) });
 await page.waitForFunction(() => !document.getElementById('btn-music-play').disabled);
+await page.$eval('#music-seek', (el) => {
+  el.value = '0.5';
+  el.dispatchEvent(new Event('input', { bubbles: true }));
+  el.dispatchEvent(new Event('change', { bubbles: true }));
+});
 await page.click('#btn-music-play');
+await page.waitForFunction(() => window.__songStarts.length > 0);
+const startedAt = await page.evaluate(() => window.__songStarts.at(-1));
+check('a track scrubbed before its first play starts from there', Math.abs(startedAt - 0.5) < 1e-6, `started at ${startedAt} s`);
 await page.fill('#cast-text', 'level check');
 const level = parseFloat(await page.inputValue('#data-volume'));
 for (const mode of ['profile', 'stealth', 'wave-ultra']) {
@@ -146,9 +172,38 @@ for (const mode of ['profile', 'stealth', 'wave-ultra']) {
   await page.click('#btn-cast-stop');
   check(`under a song, ${mode} broadcasts at the Data level`, Math.abs(gain - level) < 1e-6, `gain ${gain.toFixed(3)}, slider ${level}`);
 }
+
+/* 10. "Dip music" lowers the song for an audible send, and a send that is
+ *     stopped does not then report itself transmitted. */
+await page.click('.tab[data-panel="send"]');
+await page.click('.sub-tab[data-sendmode="text"]');
+await page.fill('#send-text-input', 'dip check, long enough to still be on air when it is stopped');
+const sent = await page.evaluate(() => window.__dataGains.length);
+await page.click('#btn-send');
+await page.waitForFunction((n) => window.__dataGains.length > n, sent);
+const dipped = await page.evaluate(() => window.__songTargets.at(-1));
+const songLevel = parseFloat(await page.inputValue('#music-volume'));
+check('an audible send dips the song', dipped > 0 && dipped <= 0.18 * songLevel + 1e-6, `song heading for ${dipped.toFixed(3)} of ${songLevel}`);
+await page.click('#btn-stop-send');
+await page.waitForTimeout(500);
+const sendStatus = await page.locator('#send-status').innerText();
+check('a stopped send does not report itself transmitted', sendStatus === 'Stopped.', sendStatus);
+await page.click('.tab[data-panel="music"]');
 await page.click('#btn-music-stop');
 
-/* 10. Screenshot for the record. */
+/* 11. A microphone that cannot be opened must not cost a ggwave decoder each
+ *     time: there are only a few, and with none left nothing can start. */
+await page.click('.tab[data-panel="translate"]');
+for (let i = 0; i < 6; i++) {
+  await page.$eval('#translate-status', (el) => { el.textContent = ''; });
+  await page.click('#btn-translate-listen');
+  await page.waitForFunction(() => !document.getElementById('btn-translate-listen').disabled
+    && document.getElementById('translate-status').textContent !== '');
+}
+const translateStatus = await page.locator('#translate-status').innerText();
+check('a failed microphone start releases its decoder', !translateStatus.includes('no free instance'), translateStatus);
+
+/* 12. Screenshot for the record. */
 await page.click('.tab[data-panel="send"]');
 await mkdir(shotDir, { recursive: true });
 await page.screenshot({ path: join(shotDir, 'browser-send.png'), fullPage: true });

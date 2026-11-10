@@ -118,6 +118,9 @@ test('throughput and ETA figures are sane', () => {
   const { chunks, seconds } = estimateTransfer({ bytes: 1024, profile: PROFILES.fast });
   assert.ok(chunks > 0 && seconds > 0);
   assert.equal(formatDuration(0), '0s');
+  assert.equal(formatDuration(119.6), '2m 0s');
+  assert.equal(formatDuration(59.96), '1m 0s');
+  assert.equal(formatDuration(3599.6), '1h 0m');
   assert.equal(formatBytes(512), '512 B');
   assert.equal(formatBytes(2048), '2.0 KB');
 });

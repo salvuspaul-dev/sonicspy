@@ -253,3 +253,24 @@ onAir('control messages carry a check, so a garbled hello is ignored rather than
   assert.equal(a.link.state, 'idle');
   assert.equal(messages(a).length, 0);
 });
+
+test('a closed link stops calling: no further hello goes on air', async () => {
+  let plays = 0;
+  let onFirst;
+  const first = new Promise((resolve) => {
+    onFirst = resolve;
+  });
+  const link = new Link({
+    fs: FS,
+    play: async () => {
+      plays++;
+      onFirst();
+    },
+  });
+  const connecting = link.connect({ attempts: 3, timeoutMs: 50 });
+  await first;
+  link.close();
+  await connecting;
+  await new Promise((r) => setTimeout(r, 300));
+  assert.equal(plays, 1);
+});

@@ -141,7 +141,13 @@ export class Translator {
       this.onEvent({ channel: 'tonedrop', mode, kind: 'text', text: message.text, id: message.id, info, at });
       return;
     }
-    const container = parseFileContainer(message.binary);
+    /* Bytes that open like a file container but are cut off are just bytes. */
+    let container = null;
+    try {
+      container = parseFileContainer(message.binary);
+    } catch {
+      /* passed on as binary below */
+    }
     if (!container) {
       this.onEvent({ channel: 'tonedrop', mode, kind: 'binary', bytes: message.binary, id: message.id, at });
       return;
