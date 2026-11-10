@@ -97,3 +97,10 @@ test('noise and music produce no transcript on any channel', async () => {
   const events = await transcribe(noise, Object.keys(CHANNELS));
   assert.deepEqual(events.map((e) => `${e.channel}:${e.text}`), []);
 });
+
+test('a file container cut off inside its own header is passed on as binary', async () => {
+  const cutOff = Uint8Array.of(0x53, 0x50, 0x46, 0x31, 0x05);
+  const clip = modulateFrames(framesForBinary(cutOff).frames, { fs: FS, profile: PROFILES.turbo });
+  const events = await transcribe(concat([silence(0.5), clip, silence(1)]), ['tonedrop']);
+  assert.deepEqual(events.map((e) => e.kind), ['binary']);
+});

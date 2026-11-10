@@ -94,7 +94,9 @@ export class Link {
    */
   constructor({ fs, play, onEvent, modes = LINK_MODES, id = randomSenderId() }) {
     this.fs = fs;
-    this.play = play;
+    this.closed = false;
+    /* Every clip goes through here, so a closed link puts nothing on air. */
+    this.play = (clip) => (this.closed ? Promise.resolve() : play(clip));
     this.onEvent = onEvent ?? (() => {});
     this.modes = modes;
     this.id = id;
@@ -127,8 +129,9 @@ export class Link {
    * stress test), so each repeat is padded differently and lands elsewhere.
    * Resolves with the final state. */
   async connect({ attempts = 3, timeoutMs = 8000 } = {}) {
-    for (let i = 0; i < attempts; i++) {
+    for (let i = 0; i < attempts && !this.closed; i++) {
       await this.hello({ salt: i });
+      if (this.closed) break;
       await new Promise((resolve) => {
         const timer = setTimeout(resolve, timeoutMs);
         this.waiters.push(() => {
@@ -139,6 +142,16 @@ export class Link {
       if (this.state === 'linked' || this.state === 'gibberlink') break;
     }
     return this.state;
+  }
+
+  /* Stop for good: nothing further goes on air, and whatever is waiting on
+   * the peer gives up now instead of at its timeout. */
+  close() {
+    this.closed = true;
+    for (const timer of this.pendingAcks.values()) clearTimeout(timer);
+    this.pendingAcks.clear();
+    for (const wake of this.waiters.splice(0)) wake();
+    for (const { wake } of this.receipts.values()) wake(false);
   }
 
   async say(text) {
@@ -255,7 +268,7 @@ export class Link {
     const more = Math.ceil(frames.length / 2) + 1;
     let batch = onAir(frames, profile.repeats, { fountain: true });
     try {
-      for (let round = 0; round <= ARQ_ROUNDS; round++) {
+      for (let round = 0; round <= ARQ_ROUNDS && !this.closed; round++) {
         await this.play(modulateFrames(batch, { fs: this.fs, profile, ...this.rate }));
         const quiet = frameSeconds(profile, Math.max(...batch.map((f) => f.length)));
         if (await within(receipt, 2500 + 1000 * (quiet + 2 * frameSeconds(profile, 64)))) return true;

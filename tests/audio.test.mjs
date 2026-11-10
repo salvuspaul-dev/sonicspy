@@ -7,7 +7,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { SonicAudio, headroomVolume, peakOf, songCeiling } from '../web/src/audio.js';
+import { SonicAudio, fromWav, peakOf, songCeiling, toWav } from '../web/src/audio.js';
 import { Demodulator, MODES, PROFILES, modulateFrames } from '../web/src/modem.js';
 import { expectedFrameBytes, framesForText, onAir } from '../web/src/protocol.js';
 
@@ -257,13 +257,6 @@ test('a receiver busy with a failed frame still hears the repeat frame after it'
   assert.equal(decoded.length, 1, 'the repeat frame is heard after the stall');
 });
 
-test('inaudible data under a song takes the headroom the song leaves, without clipping', () => {
-  const data = Float32Array.of(0.2, -0.9, 0.5);
-  assert.ok(Math.abs(headroomVolume(data, 0.4, 0.35) - 0.6 / 0.9) < 1e-6, 'fills the range above the song');
-  assert.equal(headroomVolume(data, 0, 0.35), 1, 'never boosts past unity');
-  assert.equal(headroomVolume(data, 0.95, 0.35), 0.35, 'never drops below the chosen level');
-});
-
 /* A context the real SonicAudio.context() builds its graph on, with a clock
  * the test moves and a record of every buffer source started. */
 function transportContext() {
@@ -325,7 +318,7 @@ test('a loud song is held under hidden data so the mix never passes full scale',
   await audio.startMusic(song(30, 1), { volume: 0.95 });
   const profile = MODES['wave-ultra'];
   const samples = modulateFrames(framesForText('under a loud master', { chunkBytes: profile.chunkBytes }).frames, { fs: 48000, profile });
-  const dataPeak = headroomVolume(samples, audio.musicPeak * audio.musicBaseVolume, 0.35) * peakOf(samples);
+  const dataPeak = 0.35 * peakOf(samples);
   assert.ok(audio.musicLevel * audio.musicPeak + dataPeak > 1, 'without a ceiling the two would clip');
   audio.setMusicCeiling(songCeiling(audio.musicPeak, dataPeak));
   assert.ok(audio.musicLevel * audio.musicPeak + dataPeak <= 1 + 1e-9, 'with it they fit');
@@ -398,4 +391,94 @@ test('a capture the system paused is woken, and a lost microphone is reopened', 
   audio.stopListening();
   assert.equal(tracks[1].readyState, 'ended');
   delete globalThis.window;
+});
+
+test('a stop while a lost microphone is being reopened leaves it closed', async () => {
+  const ctx = fakeContext();
+  const mic = fakeMic();
+  Object.defineProperty(globalThis, 'navigator', {
+    value: { mediaDevices: { getUserMedia: mic.getUserMedia } },
+    configurable: true,
+  });
+  const audio = new SonicAudio();
+  audio.context = async () => ctx;
+  const listening = audio.startListening(() => {});
+  await new Promise((r) => setTimeout(r, 0));
+  mic.grant();
+  await listening;
+
+  mic.streams[0].track.readyState = 'ended';
+  const reopening = audio.wake();
+  await new Promise((r) => setTimeout(r, 0));
+  audio.stopListening();
+  mic.grant();
+  await reopening;
+
+  assert.equal(ctx.processors.filter((p) => p.onaudioprocess).length, 0, 'no pipeline is left running');
+  assert.ok(mic.streams.every((s) => s.track.stopped), 'every microphone stream is released');
+  assert.equal(audio.stream, null);
+});
+
+test('a send reports whether it played to the end or was cut short', async () => {
+  const { started } = transportContext();
+  const audio = new SonicAudio();
+  const clip = new Float32Array(480);
+  const tick = () => new Promise((r) => setTimeout(r, 0));
+
+  const whole = audio.playSamples(clip);
+  await tick();
+  started.at(-1).source.onended();
+  assert.equal(await whole, true, 'a send that ran to its end');
+
+  const stopped = audio.playSamples(clip);
+  await tick();
+  audio.stopTransmit();
+  assert.equal(await stopped, false, 'a send the user stopped');
+
+  const replaced = audio.playSamples(clip);
+  await tick();
+  const next = audio.playSamples(clip);
+  assert.equal(await replaced, false, 'a send a newer one replaced');
+  await tick();
+  started.at(-1).source.onended();
+  assert.equal(await next, true);
+
+  const early = audio.playSamples(clip);
+  audio.stopTransmit();
+  assert.equal(await early, false, 'a send stopped before it started');
+  delete globalThis.window;
+});
+
+test('a track can be scrubbed before it is first played, and play starts there', async () => {
+  const { started } = transportContext();
+  const audio = new SonicAudio();
+  audio.cueMusic(song(30, 1));
+  assert.equal(audio.musicPeak, 1);
+  await audio.seekMusic(12);
+  assert.equal(audio.musicPosition(), 12);
+  await audio.resumeMusic();
+  assert.equal(started.at(-1).offset, 12);
+  delete globalThis.window;
+});
+
+test('a WAV file that is not 16-bit PCM is refused rather than misread', () => {
+  const wav = toWav(Float32Array.of(0, 0.5, -0.5, 0.25), 48000);
+  const back = fromWav(wav.buffer);
+  assert.equal(back.sampleRate, 48000);
+  assert.equal(back.samples.length, 4);
+  assert.ok(Math.abs(back.samples[1] - 0.5) < 1e-3);
+
+  const patched = (edit) => {
+    const copy = wav.slice();
+    edit(new DataView(copy.buffer));
+    return copy.buffer;
+  };
+  assert.throws(() => fromWav(patched((v) => v.setUint16(34, 24, true))), /16-bit PCM/);
+  assert.throws(() => fromWav(patched((v) => v.setUint16(34, 8, true))), /16-bit PCM/);
+  assert.throws(() => fromWav(patched((v) => {
+    v.setUint16(20, 3, true);
+    v.setUint16(34, 32, true);
+  })), /16-bit PCM/);
+  /* A float file whose header claims 16 bits is still float. */
+  assert.throws(() => fromWav(patched((v) => v.setUint16(20, 3, true))), /16-bit PCM/);
 });

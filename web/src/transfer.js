@@ -158,9 +158,11 @@ export function estimateTransfer({ bytes, profile }) {
 
 export function formatDuration(seconds) {
   if (!isFinite(seconds) || seconds <= 0) return '0s';
-  if (seconds < 60) return `${seconds.toFixed(1)}s`;
-  const m = Math.floor(seconds / 60);
-  const s = Math.round(seconds % 60);
+  /* Rounded before it is split, so 119.6 s reads "2m 0s", never "1m 60s". */
+  if (seconds < 59.95) return `${seconds.toFixed(1)}s`;
+  const total = Math.round(seconds);
+  const m = Math.floor(total / 60);
+  const s = total % 60;
   if (m < 60) return `${m}m ${s}s`;
   const h = Math.floor(m / 60);
   return `${h}h ${m % 60}m`;

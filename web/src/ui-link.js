@@ -48,11 +48,23 @@ export function initLinkUi({ audio, download, stopOthers }) {
   async function startMic(owner, channels, onEvent) {
     stop();
     stopOthers();
-    const fs = await audio.context().then((ctx) => ctx.sampleRate);
-    ui.translator = await Translator.create({ fs, channels, onEvent });
-    await audio.startListening((chunk) => ui.translator?.push(chunk));
-    ui.owner = owner;
-    return fs;
+    /* A second start while this one waits on the microphone would leave a
+     * translator, and its ggwave instance, that nothing closes. */
+    const buttons = [$('btn-link-start'), $('btn-translate-listen')];
+    for (const b of buttons) b.disabled = true;
+    try {
+      const fs = await audio.context().then((ctx) => ctx.sampleRate);
+      ui.translator = await Translator.create({ fs, channels, onEvent });
+      await audio.startListening((chunk) => ui.translator?.push(chunk));
+      ui.owner = owner;
+      return fs;
+    } catch (err) {
+      ui.translator?.close();
+      ui.translator = null;
+      throw err;
+    } finally {
+      for (const b of buttons) b.disabled = false;
+    }
   }
 
   function stop() {
@@ -62,6 +74,7 @@ export function initLinkUi({ audio, download, stopOthers }) {
     ui.translator?.close();
     ui.translator = null;
     if (ui.owner === 'link') {
+      ui.link?.close();
       ui.link = null;
       $('btn-link-start').textContent = 'Open link';
       setStatus($('link-status'), 'Link closed.', '');
@@ -236,8 +249,7 @@ export function initLinkUi({ audio, download, stopOthers }) {
     try {
       const { samples, fs } = await spoken();
       setStatus($('translate-say-status'), `Playing ${(samples.length / fs).toFixed(1)} s…`, '');
-      await audio.playSamples(samples, { volume: 1 });
-      setStatus($('translate-say-status'), 'Done.', 'ok');
+      if (await audio.playSamples(samples, { volume: 1 })) setStatus($('translate-say-status'), 'Done.', 'ok');
     } catch (err) {
       setStatus($('translate-say-status'), err.message, 'error');
     }

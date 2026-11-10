@@ -15,6 +15,7 @@ import { createRequire } from 'node:module';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { toWav } from '../web/src/audio.js';
 
 const require = createRequire(import.meta.url);
 const PLAYWRIGHT =
@@ -52,6 +53,33 @@ page.on('console', (msg) => {
 page.on('pageerror', (err) => consoleErrors.push(`pageerror: ${err.message}`));
 page.on('response', (res) => {
   if (res.status() >= 400) failedRequests.push(`${res.status()} ${res.url()}`);
+});
+/* The gain each data block plays at, and where the song's own gain was heading
+ * when the block started. The song loops; data blocks do not. Only the song's
+ * gain is ever ramped, and each start of the song records its offset. */
+await page.addInitScript(() => {
+  window.__dataGains = [];
+  window.__songTargets = [];
+  window.__songStarts = [];
+  let songTarget = null;
+  const setTarget = AudioParam.prototype.setTargetAtTime;
+  AudioParam.prototype.setTargetAtTime = function (target, ...rest) {
+    songTarget = target;
+    return setTarget.call(this, target, ...rest);
+  };
+  const connect = AudioBufferSourceNode.prototype.connect;
+  AudioBufferSourceNode.prototype.connect = function (to, ...rest) {
+    if (!this.loop && to instanceof GainNode) {
+      window.__dataGains.push(to.gain.value);
+      window.__songTargets.push(songTarget);
+    }
+    return connect.call(this, to, ...rest);
+  };
+  const start = AudioBufferSourceNode.prototype.start;
+  AudioBufferSourceNode.prototype.start = function (...args) {
+    if (this.loop) window.__songStarts.push(args[1] ?? 0);
+    return start.apply(this, args);
+  };
 });
 
 await page.goto(baseUrl, { waitUntil: 'networkidle' });
@@ -115,7 +143,82 @@ await page.waitForTimeout(1200);
 const listenStatus = await page.locator('#listen-status').innerText();
 notes.push(`microphone status in this environment: ${listenStatus}`);
 
-/* 9. Screenshot for the record. */
+/* 9. Under a song, every broadcast mode plays at the Data level slider. The
+ *    hidden bands are audible to some listeners, so the slider must reach them.
+ *    "profile" sends on the chosen profile, which step 6 left on Stealth. */
+await page.click('.tab[data-panel="diag"]');
+await page.selectOption('#profile-select', 'robust');
+await page.click('.tab[data-panel="music"]');
+const tone = Float32Array.from({ length: 48000 }, (_, i) => Math.sin((2 * Math.PI * 440 * i) / 48000));
+await page.setInputFiles('#music-file', { name: 'tone.wav', mimeType: 'audio/wav', buffer: Buffer.from(toWav(tone, 48000)) });
+await page.waitForFunction(() => !document.getElementById('btn-music-play').disabled);
+await page.$eval('#music-seek', (el) => {
+  el.value = '0.5';
+  el.dispatchEvent(new Event('input', { bubbles: true }));
+  el.dispatchEvent(new Event('change', { bubbles: true }));
+});
+await page.click('#btn-music-play');
+await page.waitForFunction(() => window.__songStarts.length > 0);
+const startedAt = await page.evaluate(() => window.__songStarts.at(-1));
+check('a track scrubbed before its first play starts from there', Math.abs(startedAt - 0.5) < 1e-6, `started at ${startedAt} s`);
+await page.fill('#cast-text', 'level check');
+const level = parseFloat(await page.inputValue('#data-volume'));
+for (const mode of ['profile', 'stealth', 'wave-ultra']) {
+  await page.selectOption('#cast-mode', mode);
+  const before = await page.evaluate(() => window.__dataGains.length);
+  await page.click('#btn-cast');
+  await page.waitForFunction((n) => window.__dataGains.length > n, before);
+  const gain = await page.evaluate(() => window.__dataGains.at(-1));
+  await page.click('#btn-cast-stop');
+  check(`under a song, ${mode} broadcasts at the Data level`, Math.abs(gain - level) < 1e-6, `gain ${gain.toFixed(3)}, slider ${level}`);
+}
+
+/* 10. "Dip music" lowers the song for an audible send, and a send that is
+ *     stopped does not then report itself transmitted. */
+await page.click('.tab[data-panel="send"]');
+await page.click('.sub-tab[data-sendmode="text"]');
+await page.fill('#send-text-input', 'dip check, long enough to still be on air when it is stopped');
+const sent = await page.evaluate(() => window.__dataGains.length);
+await page.click('#btn-send');
+await page.waitForFunction((n) => window.__dataGains.length > n, sent);
+const dipped = await page.evaluate(() => window.__songTargets.at(-1));
+const songLevel = parseFloat(await page.inputValue('#music-volume'));
+check('an audible send dips the song', dipped > 0 && dipped <= 0.18 * songLevel + 1e-6, `song heading for ${dipped.toFixed(3)} of ${songLevel}`);
+await page.click('#btn-stop-send');
+await page.waitForTimeout(500);
+const sendStatus = await page.locator('#send-status').innerText();
+check('a stopped send does not report itself transmitted', sendStatus === 'Stopped.', sendStatus);
+await page.click('.tab[data-panel="music"]');
+await page.click('#btn-music-stop');
+
+/* 11. A microphone that cannot be opened must not cost a ggwave decoder each
+ *     time: there are only a few, and with none left nothing can start. */
+await page.click('.tab[data-panel="translate"]');
+for (let i = 0; i < 6; i++) {
+  await page.$eval('#translate-status', (el) => { el.textContent = ''; });
+  await page.click('#btn-translate-listen');
+  await page.waitForFunction(() => !document.getElementById('btn-translate-listen').disabled
+    && document.getElementById('translate-status').textContent !== '');
+}
+const translateStatus = await page.locator('#translate-status').innerText();
+check('a failed microphone start releases its decoder', !translateStatus.includes('no free instance'), translateStatus);
+
+/* 12. In the Android app the page draws under the status bar, and the app
+ *     shell reports that bar's height. The stuck tab bar must sit below it. */
+await page.setViewportSize({ width: 374, height: 700 });
+await page.evaluate(() => {
+  document.documentElement.style.setProperty('--safe-area-inset-top', '40px');
+  window.scrollTo(0, document.body.scrollHeight);
+});
+const stuckAt = await page.$eval('.tabs', (el) => el.getBoundingClientRect().top);
+check('the stuck tab bar clears the status bar', Math.abs(stuckAt - 40) < 1, `tab bar at ${stuckAt} px under a 40 px status bar`);
+await page.evaluate(() => {
+  document.documentElement.style.removeProperty('--safe-area-inset-top');
+  window.scrollTo(0, 0);
+});
+await page.setViewportSize({ width: 1280, height: 900 });
+
+/* 13. Screenshot for the record. */
 await page.click('.tab[data-panel="send"]');
 await mkdir(shotDir, { recursive: true });
 await page.screenshot({ path: join(shotDir, 'browser-send.png'), fullPage: true });
