@@ -203,7 +203,22 @@ for (let i = 0; i < 6; i++) {
 const translateStatus = await page.locator('#translate-status').innerText();
 check('a failed microphone start releases its decoder', !translateStatus.includes('no free instance'), translateStatus);
 
-/* 12. Screenshot for the record. */
+/* 12. In the Android app the page draws under the status bar, and the app
+ *     shell reports that bar's height. The stuck tab bar must sit below it. */
+await page.setViewportSize({ width: 374, height: 700 });
+await page.evaluate(() => {
+  document.documentElement.style.setProperty('--safe-area-inset-top', '40px');
+  window.scrollTo(0, document.body.scrollHeight);
+});
+const stuckAt = await page.$eval('.tabs', (el) => el.getBoundingClientRect().top);
+check('the stuck tab bar clears the status bar', Math.abs(stuckAt - 40) < 1, `tab bar at ${stuckAt} px under a 40 px status bar`);
+await page.evaluate(() => {
+  document.documentElement.style.removeProperty('--safe-area-inset-top');
+  window.scrollTo(0, 0);
+});
+await page.setViewportSize({ width: 1280, height: 900 });
+
+/* 13. Screenshot for the record. */
 await page.click('.tab[data-panel="send"]');
 await mkdir(shotDir, { recursive: true });
 await page.screenshot({ path: join(shotDir, 'browser-send.png'), fullPage: true });

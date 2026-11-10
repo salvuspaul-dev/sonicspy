@@ -2,6 +2,9 @@
  * amber signal colour for whatever is live or primary, LEDs for status and
  * fader caps on the sliders. */
 :root {
+  /* The Android app draws under the status bar, and its shell reports that
+   * bar's height in --safe-area-inset-top. */
+  --inset-top: var(--safe-area-inset-top, env(safe-area-inset-top, 0px));
   --bg: #1a1b1e;
   --well: #131416;
   --panel: #222327;
@@ -39,18 +42,28 @@
 
 /* Room for the sticky tab bar when the page scrolls to something. */
 html {
-  scroll-padding-top: 76px;
+  scroll-padding-top: calc(76px + var(--inset-top));
   background: var(--bg);
 }
 
 body {
   margin: 0;
-  padding: 0 var(--gutter) 60px;
+  padding: var(--inset-top) var(--gutter) 60px;
   background: var(--bg);
   color: var(--ink);
   font: 15px/1.55 var(--sans);
   min-height: 100vh;
   -webkit-tap-highlight-color: transparent;
+}
+
+/* Keeps scrolled content out from behind the status bar's icons. */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0 0 auto;
+  height: var(--inset-top);
+  background: var(--bg);
+  z-index: 11;
 }
 
 .top,
@@ -274,7 +287,7 @@ textarea {
  * section is one tap away however far down the page you are. */
 .tabs {
   position: sticky;
-  top: 0;
+  top: var(--inset-top);
   z-index: 10;
   display: flex;
   gap: 2px;
